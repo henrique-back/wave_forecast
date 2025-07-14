@@ -1,0 +1,3 @@
+Best trial parameters:
+{'seq_len': 12, 'batch_size': 128, 'lr': 0.0013072466563629713, 'dropout': 0.10839182170728147, 'nhead': 2, 'num_encoder_layers': 1, 'num_decoder_layers': 3, 'embed_dim': 32, 'weight_decay': 1.728995913005162e-06}
+Validation loss: 4.108867168426514
