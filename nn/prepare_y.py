@@ -22,13 +22,13 @@ def prepare_y(density, seq_length=24, lead_time=1, target="hs"):
     except:
         raise ValueError("Column names must be float frequencies (e.g., '0.034')")
 
-    density_np = density.values.astype(np.float32)  # (time, freqs)
-    num_timesteps, num_freqs = density_np.shape
+    density = density.values.astype(np.float32)  # (time, freqs)
+    num_timesteps, num_freqs = density.shape
 
     num_samples = num_timesteps - seq_length - lead_time + 1
 
     if target == "hs":
-        hs = compute_hs(density_np, freqs)  # (time,)
+        hs = compute_hs(density, freqs)  # (time,)
         y = np.zeros((num_samples, lead_time, 1), dtype=np.float32)
         for i in range(num_samples):
             y[i, :, 0] = hs[i + seq_length : i + seq_length + lead_time]
@@ -37,7 +37,7 @@ def prepare_y(density, seq_length=24, lead_time=1, target="hs"):
     elif target == "density":
         y = np.zeros((num_samples, lead_time, num_freqs), dtype=np.float32)
         for i in range(num_samples):
-            y[i, :, :] = density_np[i + seq_length : i + seq_length + lead_time, :]
+            y[i, :, :] = density[i + seq_length : i + seq_length + lead_time, :]
         return torch.from_numpy(y)
 
     else:

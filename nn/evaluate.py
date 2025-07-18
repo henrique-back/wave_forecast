@@ -1,22 +1,21 @@
 import torch
-import torch
+from tqdm import tqdm
+from utils import compute_hs
 from torchmetrics.functional import (
     mean_squared_error,
     mean_absolute_percentage_error,
     pearson_corrcoef
 )
 
-def evaluate(model, dataloader, loss_fn, device='cpu', freqs=None, **loss_kwargs):
+def evaluate(model, dataloader, device='cpu', freqs=None):
     """
     Evaluate model with MSE, MAPE, Pearson CC.
 
     Parameters:
     - model: PyTorch model
     - dataloader: DataLoader yielding (X_batch, y_batch)
-    - loss_fn: loss function (e.g., nn.MSELoss() or custom callable)
     - device: computation device ('cpu' or 'cuda')
     - freqs: frequencies needed for start token (tensor or numpy array)
-    - **loss_kwargs: additional arguments passed to loss_fn (if needed)
 
     Returns:
     - MSE: 
@@ -29,7 +28,7 @@ def evaluate(model, dataloader, loss_fn, device='cpu', freqs=None, **loss_kwargs
     all_targets = []
 
     with torch.no_grad():
-        for src, y_batch in dataloader:
+        for src, y_batch in tqdm(dataloader):
             src = src.to(device)
             y_batch = y_batch.to(device)
 

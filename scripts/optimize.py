@@ -1,4 +1,6 @@
+print("Importing packages")
 import os
+import pandas as pd
 import optuna
 import optuna.visualization as vis
 from utils import get_freqs, set_seed, data_processing, save_progress
@@ -15,35 +17,49 @@ target = 'density'
 n_trials = 20
 
 # Process data
-folder_path = 'buoy_data'
-density, alpha_1, alpha_2, r_1 = data_processing(folder_path, save_path='buoy_data\processed_data.pkl')
+file_path = 'buoy_data\processed_data.pkl'
+
+if os.path.exists(file_path):
+    dfs_interpolated = pd.read_pickle(file_path)    
+    density, alpha_1, alpha_2, r_1 = dfs_interpolated
+    print("Loaded preprocessed wave spectral data")
+else:
+    folder_path = 'buoy_data'
+    density, alpha_1, alpha_2, r_1 = data_processing(folder_path, save_path='buoy_data\processed_data.pkl')
+
 freqs = get_freqs(density)
 
 for lead_time in lead_times:
     print(f"\n=== Optimizing for lead time = {lead_time} ===")
 
     # Set objective function from objective defined in nn\optimization.py
-    objective_fn = partial(objective,
-                        density=density,
-                        alpha_1=alpha_1,
-                        alpha_2=alpha_2,
-                        r_1=r_1, 
-                        freqs=freqs, 
-                        lead_time=lead_time, 
-                        target=target) 
+    objective_fn = partial(
+        objective,
+        density=density,
+        alpha_1=alpha_1,
+        alpha_2=alpha_2,
+        r_1=r_1, 
+        freqs=freqs, 
+        lead_time=lead_time, 
+        target=target) 
 
     results_folder = os.path.join(os.path.dirname(__file__), '..', 'results', f'lead_time_{lead_time}')
     os.makedirs(results_folder, exist_ok=True)
 
     # Run optuna
-    study = optuna.create_study(direction='minimize')  # minimize val loss
+    study = optuna.create_study(
+        study_name='wave_transformer',
+        storage="sqlite:///optuna_study.db",
+        direction='minimize',
+        load_if_exists=True)
+    
     study.optimize(objective_fn, n_trials=n_trials,
                    callbacks=[lambda study, trial: save_progress(study, trial, results_folder)])
     print("Best trial:")
     print(study.best_trial.params)
     print("Validation loss:", study.best_value)
 
-    # Save results to results folder
+# Save results to results folder
     result_file = os.path.join(results_folder, 'best_trial.txt')
     with open(result_file, 'w') as f:
         f.write("Best trial parameters:\n")

@@ -48,13 +48,7 @@ def data_processing(folder_path, save_path=None):
 
     # Save to file if path provided
     if save_path is not None:
-        to_save = {
-            'density': dfs_interpolated[0],
-            'alpha_1': dfs_interpolated[1],
-            'alpha_2': dfs_interpolated[2],
-            'r_1': dfs_interpolated[3]
-        }
-        pd.to_pickle(to_save, save_path)
+        pd.to_pickle(tuple(dfs_interpolated), save_path)
         print(f"Preprocessed data saved to {save_path}")
 
     return tuple(dfs_interpolated)

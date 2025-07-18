@@ -1,13 +1,15 @@
 from utils import get_start_token
 import torch
+from tqdm import tqdm
 
 def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None):
     model.train()
     total_loss = 0.0
     loss_fn = torch.nn.MSELoss()
 
+    loop = tqdm(dataloader, desc='Training', leave=False)
 
-    for src, y_batch in dataloader:
+    for src, y_batch in loop:
         src = src.to(device)  # Encoder input
         y_batch = y_batch.to(device)  # Ground truth future sequence
         
@@ -33,6 +35,8 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None):
         optimizer.step()
 
         total_loss += loss.item() * src.size(0)
+        
+        loop.set_postfix(batch_loss=loss.item())
 
     avg_loss = total_loss / len(dataloader.dataset)
     

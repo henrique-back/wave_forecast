@@ -31,7 +31,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     train_X, val_X = X[:train_size], X[train_size:]
     train_y, val_y = y[:train_size], y[train_size:]
     
-    train_loader = DataLoader(WaveSpectralDataset(train_X, train_y), batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(WaveSpectralDataset(train_X, train_y), batch_size=batch_size, shuffle=True) # shuffle shuffles order of samples, not sequence within samples
     val_loader   = DataLoader(WaveSpectralDataset(val_X, val_y), batch_size=batch_size, shuffle=False)
 
     # Model
