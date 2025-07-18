@@ -1,5 +1,8 @@
 print("Importing packages")
+import sys
 import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from pathlib import Path
 import pandas as pd
 import optuna
 import optuna.visualization as vis
@@ -7,25 +10,30 @@ from utils import get_freqs, set_seed, data_processing, save_progress
 from nn import objective
 from functools import partial
 
+print("Current working directory:", os.getcwd())
 
 # Set randomness seed
 set_seed(42)
 
 # Set parameters
 lead_times = [1, 6, 12, 24]
-target = 'density'
-n_trials = 20
+target = 'hs'
+n_trials = 100
 
 # Process data
-file_path = 'buoy_data\processed_data.pkl'
 
-if os.path.exists(file_path):
-    dfs_interpolated = pd.read_pickle(file_path)    
+project_root = Path(__file__).resolve().parent.parent
+folder_path = project_root / "buoy_data"
+file_path = folder_path / "processed_data.pkl"
+
+# Load from file if it exists
+if file_path.exists():
+    dfs_interpolated = pd.read_pickle(file_path)
     density, alpha_1, alpha_2, r_1 = dfs_interpolated
     print("Loaded preprocessed wave spectral data")
 else:
-    folder_path = 'buoy_data'
-    density, alpha_1, alpha_2, r_1 = data_processing(folder_path, save_path='buoy_data\processed_data.pkl')
+    from utils.data_processing import data_processing  # or wherever your function lives
+    density, alpha_1, alpha_2, r_1 = data_processing(folder_path, save_path=file_path)
 
 freqs = get_freqs(density)
 
@@ -48,7 +56,7 @@ for lead_time in lead_times:
 
     # Run optuna
     study = optuna.create_study(
-        study_name='wave_transformer',
+        study_name='hs_wave_transformer',
         storage="sqlite:///optuna_study.db",
         direction='minimize',
         load_if_exists=True)

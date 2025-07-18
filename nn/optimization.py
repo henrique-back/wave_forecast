@@ -11,7 +11,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     seq_len = trial.suggest_categorical('seq_len', [12, 24, 48, 96])
     batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
     lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-    dropout = trial.suggest_float('dropout', 0.0, 0.3)
+    dropout = trial.suggest_float('dropout', 0.1, 0.3)
     nhead = trial.suggest_categorical('nhead', [2, 4, 8])
     num_encoder_layers = trial.suggest_int('num_encoder_layers', 1, 4)
     num_decoder_layers = trial.suggest_int('num_decoder_layers', 1, 4)
@@ -52,13 +52,13 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     best_val_loss = float('inf')
-    patience = 3
+    patience = 5
     epochs_no_improve = 0
-    num_epochs = 10
+    num_epochs = 100
 
     for epoch in range(num_epochs):
         train_metrics = train_one_epoch(model, train_loader, optimizer, device, freqs)
-        val_metrics = evaluate(model, val_loader, device)
+        val_metrics = evaluate(model, val_loader, device, freqs)
 
         print(f"Epoch {epoch+1}/{num_epochs} - "
             f"Train MSE: {train_metrics['MSE']:.4f} | "
