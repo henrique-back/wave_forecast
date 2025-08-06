@@ -61,8 +61,8 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         val_metrics = evaluate(model, val_loader, device, freqs)
 
         print(f"Epoch {epoch+1}/{num_epochs} - "
-            f"Train MSE: {train_metrics['MSE']:.4f} | "
-            f"Val MSE: {val_metrics['MSE']:.4f} | "
+            f"Train MSE: {train_metrics['RMSE']:.4f} | "
+            f"Val MSE: {val_metrics['RMSE']:.4f} | "
             f"Val MAPE: {val_metrics['MAPE']:.2f}% | "
             f"Val CC: {val_metrics['CC']:.4f}")
 
