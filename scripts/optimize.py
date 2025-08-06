@@ -21,7 +21,6 @@ target = 'hs'
 n_trials = 100
 
 # Process data
-
 project_root = Path(__file__).resolve().parent.parent
 folder_path = project_root / "buoy_data"
 file_path = folder_path / "processed_data.pkl"
@@ -37,49 +36,68 @@ else:
 
 freqs = get_freqs(density)
 
-for lead_time in lead_times:
-    print(f"\n=== Optimizing for lead time = {lead_time} ===")
+deltats = [1, 6, 12]
+for deltat in deltats:
+    # Downsample
+    density_d = density[::deltat]
+    alpha_1_d = alpha_1[::deltat]
+    alpha_2_d = alpha_2[::deltat]
+    r_1_d = r_1[::deltat]
 
-    # Set objective function from objective defined in nn\optimization.py
-    objective_fn = partial(
-        objective,
-        density=density,
-        alpha_1=alpha_1,
-        alpha_2=alpha_2,
-        r_1=r_1, 
-        freqs=freqs, 
-        lead_time=lead_time, 
-        target=target) 
+    for lead_time in lead_times:
+        # Convert lead_time to hours
+        lead_time_hours = lead_time * deltat
+        print(f"\n=== Optimizing for deltat = {deltat}, lead time = {lead_time_hours}h ===")
 
-    results_folder = os.path.join(os.path.dirname(__file__), '..', 'results', f'lead_time_{lead_time}')
-    os.makedirs(results_folder, exist_ok=True)
+        # Define objective function
+        objective_fn = partial(
+            objective,
+            density=density_d,
+            alpha_1=alpha_1_d,
+            alpha_2=alpha_2_d,
+            r_1=r_1_d, 
+            freqs=freqs, 
+            lead_time=lead_time,
+            target=target) 
 
-    # Run optuna
-    study = optuna.create_study(
-        study_name='hs_wave_transformer',
-        storage="sqlite:///optuna_study.db",
-        direction='minimize',
-        load_if_exists=True)
-    
-    study.optimize(objective_fn, n_trials=n_trials,
-                   callbacks=[lambda study, trial: save_progress(study, trial, results_folder)])
-    print("Best trial:")
-    print(study.best_trial.params)
-    print("Validation loss:", study.best_value)
+        # Folder for results
+        results_folder = os.path.join(
+            os.path.dirname(__file__), '..', 'results', f'deltat_{deltat}_lead_{lead_time_hours}h'
+        )
+        os.makedirs(results_folder, exist_ok=True)
 
-# Save results to results folder
-    result_file = os.path.join(results_folder, 'best_trial.txt')
-    with open(result_file, 'w') as f:
-        f.write("Best trial parameters:\n")
-        f.write(str(study.best_trial.params) + '\n')
-        f.write(f"Validation loss: {study.best_value}\n")
+        # Create unique Optuna study name for this combo
+        study_name = f'hs_wave_transformer_deltat_{deltat}_lead_{lead_time_hours}h'
 
-    print(f"Results saved to {result_file}")
+        # Run optuna
+        study = optuna.create_study(
+            study_name=study_name,
+            storage="sqlite:///optuna_study.db",
+            direction='minimize',
+            load_if_exists=True)
+        
+        study.optimize(objective_fn, n_trials=n_trials,
+                    callbacks=[lambda study, trial: save_progress(study, trial, results_folder)])
+        print("Best trial:")
+        print(study.best_trial.params)
+        print("Validation loss:", study.best_value)
 
-    fig = vis.plot_param_importances(study)
-    fig.write_html(os.path.join(results_folder, 'param_importances.html'))
+        result_file = os.path.join(results_folder, 'best_trial.txt')
+        with open(result_file, 'w') as f:
+            f.write(f"Delta t: {deltat}\n")
+            f.write(f"Lead time (steps): {lead_time}\n")
+            f.write(f"Lead time (hours): {lead_time_hours}\n")
+            f.write("Best trial parameters:\n")
+            f.write(str(study.best_trial.params) + '\n')
+            f.write(f"Validation loss: {study.best_value}\n")
 
-    fig = vis.plot_optimization_history(study)
-    fig.write_html(os.path.join(results_folder, 'optimization_history.html'))
+        print(f"Results saved to {result_file}")
 
-    print(f"Visualizations saved to {results_folder}")
+        # Save visualizations
+        fig = vis.plot_param_importances(study)
+        fig.write_html(os.path.join(results_folder, 'param_importances.html'))
+
+        fig = vis.plot_optimization_history(study)
+        fig.write_html(os.path.join(results_folder, 'optimization_history.html'))
+
+        print(f"Visualizations saved to {results_folder}")
