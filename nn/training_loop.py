@@ -1,11 +1,11 @@
-from utils import get_start_token
+from utils import get_start_token, RMSELoss
 import torch
 from tqdm import tqdm
 
 def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None):
     model.train()
     total_loss = 0.0
-    loss_fn = torch.nn.MSELoss()
+    loss_fn = RMSELoss()
 
     loop = tqdm(dataloader, desc='Training', leave=False)
 
@@ -40,4 +40,4 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None):
 
     avg_loss = total_loss / len(dataloader.dataset)
     
-    return {'MSE': avg_loss}
+    return {'RMSE': avg_loss}
