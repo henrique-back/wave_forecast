@@ -1,8 +1,7 @@
 import torch
 from tqdm import tqdm
-from utils import compute_hs
+from utils import compute_hs, RMSELoss
 from torchmetrics.functional import (
-    mean_squared_error,
     mean_absolute_percentage_error,
     pearson_corrcoef
 )
@@ -26,6 +25,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None):
     model.eval()
     all_preds = []
     all_targets = []
+    rmse_fn = RMSELoss()
 
     with torch.no_grad():
         for src, y_batch in tqdm(dataloader):
@@ -58,8 +58,8 @@ def evaluate(model, dataloader, device='cpu', freqs=None):
     y_true_all = torch.cat(all_targets, dim=0).flatten()
 
     # Compute metrics
-    mse = mean_squared_error(y_pred_all, y_true_all).item()
+    rmse = rmse_fn(y_pred_all, y_true_all).item()
     mape = mean_absolute_percentage_error(y_pred_all, y_true_all).item()
     cc = pearson_corrcoef(y_pred_all, y_true_all).item()
 
-    return {'MSE': mse, 'MAPE': mape, 'CC': cc}
+    return {'RMSE': rmse, 'MAPE': mape, 'CC': cc}

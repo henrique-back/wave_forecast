@@ -7,3 +7,4 @@ from .get_start_token import get_start_token
 from .get_freqs import get_freqs
 from .data_processing import data_processing
 from .save_progress import save_progress
+from .loss import RMSELoss
