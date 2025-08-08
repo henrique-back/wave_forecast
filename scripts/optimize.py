@@ -16,7 +16,7 @@ print("Current working directory:", os.getcwd())
 set_seed(42)
 
 # Set parameters
-lead_times = [1, 6, 12, 24]
+lead_times_hours = [1, 6, 12, 24, 48, 72]
 target = 'hs'
 n_trials = 100
 
@@ -44,10 +44,12 @@ for deltat in deltats:
     alpha_2_d = alpha_2[::deltat]
     r_1_d = r_1[::deltat]
 
-    for lead_time in lead_times:
-        # Convert lead_time to hours
-        lead_time_hours = lead_time * deltat
-        print(f"\n=== Optimizing for deltat = {deltat}, lead time = {lead_time_hours}h ===")
+    # Convert hours to steps (skip hours not divisible by deltat)
+    lead_times_steps = [lt // deltat for lt in lead_times_hours if lt % deltat == 0]
+
+    for lead_time_steps, lead_time_hours in zip(lead_times_steps, 
+                                                [lt for lt in lead_times_hours if lt % deltat == 0]):
+        print(f"\n=== Optimizing for deltat={deltat}h, lead_time={lead_time_hours}h ({lead_time_steps} steps) ===")
 
         # Define objective function
         objective_fn = partial(
@@ -57,17 +59,15 @@ for deltat in deltats:
             alpha_2=alpha_2_d,
             r_1=r_1_d, 
             freqs=freqs, 
-            lead_time=lead_time,
+            lead_time=lead_time_steps,
             target=target) 
 
-        # Folder for results
-        results_folder = os.path.join(
-            os.path.dirname(__file__), '..', 'results', f'deltat_{deltat}_lead_{lead_time_hours}h'
-        )
-        os.makedirs(results_folder, exist_ok=True)
-
-        # Create unique Optuna study name for this combo
+        # Create unique Optuna study name
         study_name = f'hs_wave_transformer_deltat_{deltat}_lead_{lead_time_hours}h'
+
+        # Folder for results
+        results_folder = Path(__file__).parent.parent / 'results' / study_name
+        results_folder.mkdir(parents=True, exist_ok=True)
 
         # Run optuna
         study = optuna.create_study(
@@ -85,7 +85,7 @@ for deltat in deltats:
         result_file = os.path.join(results_folder, 'best_trial.txt')
         with open(result_file, 'w') as f:
             f.write(f"Delta t: {deltat}\n")
-            f.write(f"Lead time (steps): {lead_time}\n")
+            f.write(f"Lead time (steps): {lead_time_steps}\n")
             f.write(f"Lead time (hours): {lead_time_hours}\n")
             f.write("Best trial parameters:\n")
             f.write(str(study.best_trial.params) + '\n')
