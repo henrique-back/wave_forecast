@@ -61,12 +61,12 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         val_metrics = evaluate(model, val_loader, device, freqs)
 
         print(f"Epoch {epoch+1}/{num_epochs} - "
-            f"Train MSE: {train_metrics['RMSE']:.4f} | "
-            f"Val MSE: {val_metrics['RMSE']:.4f} | "
+            f"Train RMSE: {train_metrics['RMSE']:.4f} | "
+            f"Val RMSE: {val_metrics['RMSE']:.4f} | "
             f"Val MAPE: {val_metrics['MAPE']:.2f}% | "
             f"Val CC: {val_metrics['CC']:.4f}")
 
-        val_loss = val_metrics['MSE']  # Optimize on MSE
+        val_loss = val_metrics['RMSE']  # Optimize on RMSE
 
         trial.report(val_loss, epoch)
         if trial.should_prune():
