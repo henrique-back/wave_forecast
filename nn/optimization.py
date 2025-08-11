@@ -24,21 +24,37 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         raise optuna.exceptions.TrialPruned()
 
     # Prepare data
-    X = prepare_X(density, alpha_1, alpha_2, r_1, seq_len, lead_time)
-    y = prepare_y(density, seq_len, lead_time, target=target)
-    
-    train_size = int(0.8 * len(X))
-    train_X, val_X = X[:train_size], X[train_size:]
-    train_y, val_y = y[:train_size], y[train_size:]
-    
-    train_loader = DataLoader(WaveSpectralDataset(train_X, train_y), batch_size=batch_size, shuffle=True) # shuffle shuffles order of samples, not sequence within samples
+    n = len(density)
+    train_end = int(0.7 * n) # 70% train
+    val_end   = int(0.85 * n) # 15% val + 15% test
+
+    train_density, val_density, test_density = density[:train_end], density[train_end:val_end], density[val_end:]
+    train_alpha1, val_alpha1, test_alpha_1 = alpha_1[:train_end], alpha_1[train_end:val_end], alpha_1[val_end:]
+    train_alpha2, val_alpha2, test_alpha_2 = alpha_2[:train_end], alpha_2[train_end:val_end], alpha_2[val_end:]
+    train_r1, val_r1, test_r1 = r_1[:train_end], r_1[train_end:val_end], r_1[val_end:]
+
+    # Prepare sequences separately
+    train_X = prepare_X(train_density, train_alpha1, train_alpha2, train_r1, seq_len, lead_time)
+    train_y = prepare_y(train_density, seq_len, lead_time, target=target)
+
+    val_X   = prepare_X(val_density, val_alpha1, val_alpha2, val_r1, seq_len, lead_time)
+    val_y   = prepare_y(val_density, seq_len, lead_time, target=target)
+
+    test_x  = prepare_X(test_density, test_alpha_1, test_alpha_2, test_r1, seq_len, lead_time)
+    test_y  = prepare_y(test_density, seq_len, lead_time, target=target)
+
+    # DataLoaders
+    train_loader = DataLoader(WaveSpectralDataset(train_X, train_y), batch_size=batch_size, shuffle=True)
     val_loader   = DataLoader(WaveSpectralDataset(val_X, val_y), batch_size=batch_size, shuffle=False)
+    test_loader  = DataLoader(WaveSpectralDataset(test_x, test_y), batch_size=batch_size, shuffle=False)
+
 
     # Model
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f'Running on device: {device}')
 
     model = WaveHeightBaselineNN(
-        num_freqs=X.shape[2],
+        num_freqs=train_X.shape[2],
         freqs=freqs, 
         target=target, 
         dropout=dropout,
@@ -80,5 +96,9 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
             if epochs_no_improve >= patience:
                 print("Early stopping")
                 break
+    
+    model.load_state_dict(torch.load("best_model.pth"))
 
+    test_metrics = evaluate(model, test_loader, device, freqs)
+    print(f"Final test metrics: {test_metrics}")
     return best_val_loss
