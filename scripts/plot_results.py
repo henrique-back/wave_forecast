@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 base_results_folder = os.path.join(os.path.dirname(__file__), '..', 'results')
 
 # Regex to extract deltat and lead time in hours from folder name
-pattern = re.compile(r'deltat_(\d+)_lead_(\d+)h')
+pattern = re.compile(r'hs_wave_transformer_deltat_(\d+)_lead_(\d+)h')
 
 results = []
 
@@ -46,7 +46,7 @@ for deltat, values in grouped.items():
     plt.plot(hours, losses, marker='o', label=f"Δt = {deltat}h")
 
 plt.xlabel("Lead Time (hours)")
-plt.ylabel("Best Validation Loss (RMSE or MSE)")
+plt.ylabel("Best Validation Loss (RMSE)")
 plt.title("Best Forecast Error vs Lead Time (per Δt)")
 plt.grid(True)
 plt.legend(title="Sampling Interval")
