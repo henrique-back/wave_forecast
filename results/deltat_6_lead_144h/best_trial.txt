@@ -1,6 +1,0 @@
-Delta t: 6
-Lead time (steps): 24
-Lead time (hours): 144
-Best trial parameters:
-{'seq_len': 96, 'batch_size': 64, 'lr': 0.0004861703968203312, 'dropout': 0.18190685766707937, 'nhead': 8, 'num_encoder_layers': 3, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 2.0607424146589886e-06}
-Validation loss: 0.24267637729644775
