@@ -16,7 +16,7 @@ print("Current working directory:", os.getcwd())
 set_seed(42)
 
 # Set parameters
-lead_times_hours = [1, 6, 12, 24, 48, 72]
+lead_times_hours = [1, 6, 12, 24, 48, 72, 96]
 target = 'hs'
 n_trials = 100
 
