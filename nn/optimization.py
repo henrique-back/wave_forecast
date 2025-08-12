@@ -68,7 +68,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     best_val_loss = float('inf')
-    patience = 5
+    patience = 10
     epochs_no_improve = 0
     num_epochs = 100
 
@@ -97,8 +97,6 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
                 print("Early stopping")
                 break
     
-    model.load_state_dict(torch.load("best_model.pth"))
-
     test_metrics = evaluate(model, test_loader, device, freqs)
     print(f"Final test metrics: {test_metrics}")
     return best_val_loss

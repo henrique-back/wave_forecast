@@ -2,5 +2,5 @@ Delta t: 12
 Lead time (steps): 2
 Lead time (hours): 24
 Best trial parameters:
-{'seq_len': 96, 'batch_size': 32, 'lr': 0.0012030190524551876, 'dropout': 0.1082207136121768, 'nhead': 2, 'num_encoder_layers': 2, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 4.88890840456242e-06}
-Validation loss: 0.3404124677181244
+{'seq_len': 96, 'batch_size': 64, 'lr': 0.000979853393406558, 'dropout': 0.13681934608597995, 'nhead': 4, 'num_encoder_layers': 4, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 0.001128600000299173}
+Validation loss: 0.4548819661140442

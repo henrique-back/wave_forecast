@@ -1,2 +1,2 @@
-Best value: 0.3421579897403717
-Best params: {'seq_len': 48, 'batch_size': 32, 'lr': 0.00040774645762990935, 'dropout': 0.18860382592843514, 'nhead': 8, 'num_encoder_layers': 4, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 1.0364992975886733e-06}
+Best value: 0.44909027218818665
+Best params: {'seq_len': 96, 'batch_size': 32, 'lr': 0.00024660497010006716, 'dropout': 0.2706098695674784, 'nhead': 8, 'num_encoder_layers': 4, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 1.830256906235681e-06}
