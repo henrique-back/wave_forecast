@@ -27,6 +27,7 @@ def prepare_y(density, seq_length=24, lead_time=1, target="hs"):
 
     num_samples = num_timesteps - seq_length - lead_time + 1
 
+    # Build targets storing the sequence vector for all t <= lead_times
     if target == "hs":
         hs = compute_hs(density, freqs)  # (time,)
         y = np.zeros((num_samples, lead_time, 1), dtype=np.float32)
