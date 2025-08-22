@@ -8,19 +8,11 @@ from torchmetrics.functional import (
 
 def evaluate(model, dataloader, device='cpu', freqs=None):
     """
-    Evaluate model with MSE, MAPE, Pearson CC.
-
-    Parameters:
-    - model: PyTorch model
-    - dataloader: DataLoader yielding (X_batch, y_batch)
-    - device: computation device ('cpu' or 'cuda')
-    - freqs: frequencies needed for start token (tensor or numpy array)
+    Evaluate model with RMSE, MAPE, Pearson CC per horizon and overall.
 
     Returns:
-    - MSE: 
-    - MAPE:
-    - Pearson CC:
-    float, average loss over the dataset
+    - metrics_per_horizon: dict with keys 'RMSE', 'MAPE', 'CC', each shape (lead_time,)
+    - metrics_overall: dict with single float values averaged across horizons
     """
     model.eval()
     all_preds = []
@@ -33,8 +25,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None):
             y_batch = y_batch.to(device)
 
             # Prepare decoder input
-            last_spectrum = src[:, -1, :, 0]  # Select spectrum density channel
-
+            last_spectrum = src[:, -1, :, 0]  # spectrum channel
             if model.target == 'hs':
                 hs = compute_hs(last_spectrum.cpu().numpy(), freqs.cpu().numpy())
                 hs = torch.from_numpy(hs).to(device).float()
@@ -42,7 +33,6 @@ def evaluate(model, dataloader, device='cpu', freqs=None):
             else:
                 start_token = last_spectrum
 
-            # Prepare full decoder input with teacher forcing
             tgt = torch.zeros_like(y_batch)
             tgt[:, 0] = start_token
             tgt[:, 1:] = y_batch[:, :-1]
@@ -53,13 +43,30 @@ def evaluate(model, dataloader, device='cpu', freqs=None):
             all_preds.append(y_pred.cpu())
             all_targets.append(y_batch.cpu())
 
-    # Concatenate all batches
-    y_pred_all = torch.cat(all_preds, dim=0).flatten()
-    y_true_all = torch.cat(all_targets, dim=0).flatten()
+    # Concatenate batches
+    y_pred_all = torch.cat(all_preds, dim=0)  # (num_samples, lead_time, output_dim)
+    y_true_all = torch.cat(all_targets, dim=0)
 
-    # Compute metrics
-    rmse = rmse_fn(y_pred_all, y_true_all).item()
-    mape = mean_absolute_percentage_error(y_pred_all, y_true_all).item()
-    cc = pearson_corrcoef(y_pred_all, y_true_all).item()
+    # Metrics per horizon (lead_time)
+    lead_time = y_pred_all.shape[1]
 
-    return {'RMSE': rmse, 'MAPE': mape, 'CC': cc}
+    rmse_per_horizon = []
+    mape_per_horizon = []
+    cc_per_horizon = []
+
+    for t in range(lead_time):
+        y_pred_t = y_pred_all[:, t]
+        y_true_t = y_true_all[:, t]
+
+        rmse_per_horizon.append(rmse_fn(y_pred_t, y_true_t).item())
+        mape_per_horizon.append(mean_absolute_percentage_error(y_pred_t, y_true_t).item())
+        cc_per_horizon.append(pearson_corrcoef(y_pred_t, y_true_t).item())
+
+    # Convert to tensors or lists
+    metrics_per_horizon = {
+        'RMSE': torch.tensor(rmse_per_horizon),
+        'MAPE': torch.tensor(mape_per_horizon),
+        'CC': torch.tensor(cc_per_horizon)
+    }
+
+    return metrics_per_horizon
