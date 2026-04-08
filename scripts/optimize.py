@@ -73,14 +73,14 @@ for deltat in deltats:
         study = optuna.create_study(
             study_name=study_name,
             storage="sqlite:///optuna_study.db",
-            direction='minimize',
+            direction='maximize',
             load_if_exists=True)
         
         study.optimize(objective_fn, n_trials=n_trials,
                     callbacks=[lambda study, trial: save_progress(study, trial, results_folder)])
         print("Best trial:")
         print(study.best_trial.params)
-        print("Validation loss:", study.best_value)
+        print("Best val mean-step Skill Score:", study.best_value)
 
         result_file = os.path.join(results_folder, 'best_trial.txt')
         with open(result_file, 'w') as f:
@@ -89,7 +89,7 @@ for deltat in deltats:
             f.write(f"Lead time (hours): {lead_time_hours}\n")
             f.write("Best trial parameters:\n")
             f.write(str(study.best_trial.params) + '\n')
-            f.write(f"Validation loss: {study.best_value}\n")
+            f.write(f"Best val mean-step Skill Score: {study.best_value}\n")
 
         print(f"Results saved to {result_file}")
 

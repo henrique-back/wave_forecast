@@ -67,29 +67,31 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    best_val_loss = float('inf')
+    best_val_score = float('-inf')
     patience = 10
     epochs_no_improve = 0
     num_epochs = 100
 
     for epoch in range(num_epochs):
         train_metrics = train_one_epoch(model, train_loader, optimizer, device, freqs)
-        val_metrics = evaluate(model, val_loader, device, freqs)
+        val_metrics = evaluate(model, val_loader, device, freqs, lead_time=lead_time)
+
+        # Mean per-step Skill Score vs persistence — accounts for varying
+        # persistence difficulty across seq_len configurations
+        val_score = sum(val_metrics['per_step_SS']) / len(val_metrics['per_step_SS'])
 
         print(f"Epoch {epoch+1}/{num_epochs} - "
             f"Train RMSE: {train_metrics['RMSE']:.4f} | "
-            f"Val RMSE: {val_metrics['RMSE']:.4f} | "
+            f"Val mean-step SS: {val_score:.4f} | "
             f"Val MAPE: {val_metrics['MAPE']:.2f}% | "
             f"Val CC: {val_metrics['CC']:.4f}")
 
-        val_loss = val_metrics['RMSE']  # Optimize on RMSE
-
-        trial.report(val_loss, epoch)
+        trial.report(val_score, epoch)
         if trial.should_prune():
             raise optuna.TrialPruned()
 
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if val_score > best_val_score:
+            best_val_score = val_score
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
@@ -97,6 +99,6 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
                 print("Early stopping")
                 break
     
-    test_metrics = evaluate(model, test_loader, device, freqs)
+    test_metrics = evaluate(model, test_loader, device, freqs, lead_time=lead_time)
     print(f"Final test metrics: {test_metrics}")
-    return best_val_loss
+    return best_val_score
