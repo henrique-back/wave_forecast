@@ -2,5 +2,5 @@ Delta t: 1
 Lead time (steps): 6
 Lead time (hours): 6
 Best trial parameters:
-{'seq_len': 48, 'batch_size': 32, 'lr': 0.0010739030584532173, 'dropout': 0.12451088872474807, 'nhead': 2, 'num_encoder_layers': 1, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 3.468487658805434e-05}
-Validation loss: 0.19431012868881226
+{'seq_len': 96, 'batch_size': 32, 'lr': 0.0007999491189239373, 'dropout': 0.29872083526202076, 'nhead': 8, 'num_encoder_layers': 2, 'num_decoder_layers': 1, 'embed_dim': 64, 'weight_decay': 1.5509938224435025e-06}
+Best val mean-step Skill Score: -0.02079599534691373
