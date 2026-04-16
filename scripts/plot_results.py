@@ -1,53 +1,75 @@
 import os
+import ast
 import re
 import matplotlib.pyplot as plt
+
+# ── Configurable ──────────────────────────────────────────────────────────────
+# Choose any scalar validation metric stored in best_trial.txt:
+#   val_RMSE | val_MAPE | val_CC | val_Bias | val_R2 | val_overall_SS
+METRIC = 'val_RMSE'
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Path to results folder
 base_results_folder = os.path.join(os.path.dirname(__file__), '..', 'results')
 
-# Regex to extract deltat and lead time in hours from folder name
-pattern = re.compile(r'hs_wave_transformer_deltat_(\d+)_lead_(\d+)h')
+# Regexes to extract deltat and lead time from nested folder names
+deltat_pattern = re.compile(r'deltat_(\d+)')
+lead_pattern = re.compile(r'lead_(\d+)h')
 
 results = []
 
-for folder in os.listdir(base_results_folder):
-    match = pattern.match(folder)
-    if match:
-        deltat = int(match.group(1))
-        lead_hours = int(match.group(2))
-
-        best_file = os.path.join(base_results_folder, folder, 'best_trial.txt')
-        if os.path.exists(best_file):
+for variable in os.listdir(base_results_folder):
+    variable_dir = os.path.join(base_results_folder, variable)
+    if not os.path.isdir(variable_dir):
+        continue
+    for deltat_folder in os.listdir(variable_dir):
+        deltat_match = deltat_pattern.fullmatch(deltat_folder)
+        if not deltat_match:
+            continue
+        deltat = int(deltat_match.group(1))
+        deltat_dir = os.path.join(variable_dir, deltat_folder)
+        for lead_folder in os.listdir(deltat_dir):
+            lead_match = lead_pattern.fullmatch(lead_folder)
+            if not lead_match:
+                continue
+            lead_hours = int(lead_match.group(1))
+            best_file = os.path.join(deltat_dir, lead_folder, 'best_trial.txt')
+            if not os.path.exists(best_file):
+                continue
+            metrics = {}
             with open(best_file, 'r') as f:
-                lines = f.readlines()
-                # Find line with Validation loss
-                for line in lines:
-                    if "Validation loss" in line:
-                        val_loss = float(line.strip().split(":")[1])
-                        results.append((deltat, lead_hours, val_loss))
-                        break
+                for line in f:
+                    if ':' in line:
+                        key, _, val = line.strip().partition(':')
+                        key = key.strip()
+                        val = val.strip()
+                        if key.startswith('val_'):
+                            try:
+                                metrics[key] = ast.literal_eval(val)
+                            except (ValueError, SyntaxError):
+                                pass
+            if METRIC in metrics:
+                results.append((deltat, lead_hours, metrics[METRIC]))
 
 # Convert to sorted list
 results.sort(key=lambda x: (x[0], x[1]))  # sort by deltat then lead_hours
 
 # Group by deltat
 grouped = {}
-for deltat, lead_hours, val_loss in results:
-    if deltat not in grouped:
-        grouped[deltat] = []
-    grouped[deltat].append((lead_hours, val_loss))
+for deltat, lead_hours, value in results:
+    grouped.setdefault(deltat, []).append((lead_hours, value))
 
 # Plot
 plt.figure(figsize=(8, 5))
 for deltat, values in grouped.items():
     values.sort(key=lambda x: x[0])  # sort by lead_hours
     hours = [v[0] for v in values]
-    losses = [v[1] for v in values]
-    plt.plot(hours, losses, marker='o', label=f"Δt = {deltat}h")
+    metric_values = [v[1] for v in values]
+    plt.plot(hours, metric_values, marker='o', label=f"Δt = {deltat}h")
 
 plt.xlabel("Lead Time (hours)")
-plt.ylabel("Best Validation Loss (RMSE)")
-plt.title("Best Forecast Error vs Lead Time (per Δt)")
+plt.ylabel(METRIC)
+plt.title(f"{METRIC} vs Lead Time (per Δt)")
 plt.grid(True)
 plt.legend(title="Sampling Interval")
 plt.tight_layout()

@@ -75,12 +75,17 @@ class WaveHeightBaselineNN(nn.Module):
         return output
     
     @torch.no_grad() #disables gradient tracking during inference (faster & avoids memory leaks).
-    def infer(self, src, freqs, lead_time):
+    def infer(self, src, freqs, lead_time, freq_means=None):
         """Autoregressive inference for multi-step forecasting.
 
         Args:
-            src (torch.Tensor): Input to the encoder [batch_size, src_seq_len, num_freqs, num_channels]
-            lead_time (int): Number of future time steps to forecast.
+            src        : torch.Tensor [batch_size, src_seq_len, num_freqs, num_channels]
+            freqs      : torch.Tensor [num_freqs] — actual frequency grid
+            lead_time  : int — number of future steps to forecast
+            freq_means : torch.Tensor | None [num_freqs] — per-frequency training
+                         mean μ(f) used to denormalise the spectrum before computing
+                         the Hs start token (required for physically correct Hs when
+                         target == 'hs'; unused for density target)
 
         Returns:
             torch.Tensor: Forecasted sequence [batch_size, lead_time, output_dim]
@@ -91,7 +96,8 @@ class WaveHeightBaselineNN(nn.Module):
         # Prepare output tensor for decoder inputs + future predictions
         output = torch.zeros((batch_size, lead_time + 1, output_dim), device=src.device)
 
-        start_token = get_start_token(src, self.target, freqs, src.device)
+        start_token = get_start_token(src, self.target, freqs, src.device,
+                                      freq_means=freq_means)
         output[:, 0] = start_token
 
         # Autoregressive decoding loop

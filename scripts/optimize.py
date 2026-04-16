@@ -15,10 +15,27 @@ print("Current working directory:", os.getcwd())
 # Set randomness seed
 set_seed(42)
 
+# Bump this when objective definition, hyperparameter space, or training logic
+# changes in a way that makes old trials incomparable.  A new version creates
+# a fresh study (and fresh DB file) so stale trials never corrupt the TPE
+# surrogate model.
+STUDY_VERSION = 'v2'
+
 # Set parameters
-lead_times_hours = [1, 6, 12, 24, 48, 72, 96]
-target = 'hs'
-n_trials = 100
+lead_times_hours = [6, 12, 24, 48]
+target = 'density'
+n_trials = 50
+
+# Metric used to select the best epoch, drive early stopping and LR scheduling,
+# and report the Optuna trial value.  Must be one of:
+#   'weighted_mean_SS'  exponentially-weighted mean per-step Skill Score (default)
+#   'overall_SS'        Skill Score on flattened all-step RMSE
+#   'RMSE'              negative overall RMSE
+#   'Hs_RMSE'           negative Hs RMSE           (density target only)
+#   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
+#   'Shape_RMSE'        negative spectral shape RMSE (density target only)
+#   'SI_mean'           negative mean Scatter Index  (density target only)
+OBJECTIVE_METRIC = 'Shape_RMSE'
 
 # Process data
 project_root = Path(__file__).resolve().parent.parent
@@ -36,7 +53,7 @@ else:
 
 freqs = get_freqs(density)
 
-deltats = [1, 6, 12]
+deltats = [1]
 for deltat in deltats:
     # Downsample
     density_d = density[::deltat]
@@ -57,30 +74,39 @@ for deltat in deltats:
             density=density_d,
             alpha_1=alpha_1_d,
             alpha_2=alpha_2_d,
-            r_1=r_1_d, 
-            freqs=freqs, 
+            r_1=r_1_d,
+            freqs=freqs,
             lead_time=lead_time_steps,
-            target=target) 
+            target=target,
+            objective_metric=OBJECTIVE_METRIC)
 
         # Create unique Optuna study name
-        study_name = f'hs_wave_transformer_deltat_{deltat}_lead_{lead_time_hours}h'
+        target_folder = f'{target}'
+        deltat_folder = f'deltat_{deltat}'
+        lead_hours = f'lead_{lead_time_hours}h'
+        study_name = f'{target_folder}_{deltat_folder}_{lead_hours}_{STUDY_VERSION}'
 
         # Folder for results
-        results_folder = Path(__file__).parent.parent / 'results' / study_name
+        results_folder = Path(__file__).parent.parent / 'results' / target_folder / deltat_folder / lead_hours
         results_folder.mkdir(parents=True, exist_ok=True)
 
         # Run optuna
+        sampler = optuna.samplers.TPESampler(n_startup_trials=20, multivariate=True, seed=42)
+        # num_epochs=100, early stopping patience=10 → ~20% warmup = 20 steps
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=20)
         study = optuna.create_study(
             study_name=study_name,
-            storage="sqlite:///optuna_study.db",
+            storage=f"sqlite:///optuna_study_{STUDY_VERSION}.db",
             direction='maximize',
-            load_if_exists=True)
+            load_if_exists=True,
+            sampler=sampler,
+            pruner=pruner)
         
         study.optimize(objective_fn, n_trials=n_trials,
                     callbacks=[lambda study, trial: save_progress(study, trial, results_folder)])
         print("Best trial:")
         print(study.best_trial.params)
-        print("Best val mean-step Skill Score:", study.best_value)
+        print("Validation loss:", study.best_value)
 
         result_file = os.path.join(results_folder, 'best_trial.txt')
         with open(result_file, 'w') as f:
@@ -89,7 +115,23 @@ for deltat in deltats:
             f.write(f"Lead time (hours): {lead_time_hours}\n")
             f.write("Best trial parameters:\n")
             f.write(str(study.best_trial.params) + '\n')
-            f.write(f"Best val mean-step Skill Score: {study.best_value}\n")
+            attrs = study.best_trial.user_attrs
+            scalar_keys = ['val_RMSE', 'val_MAPE', 'val_CC', 'val_Bias', 'val_R2', 'val_overall_SS']
+            list_keys = ['val_per_step_RMSE', 'val_per_step_RMSE_pers', 'val_per_step_SS',
+                         'val_per_step_Bias', 'val_per_step_R2']
+            for key in scalar_keys:
+                if key in attrs:
+                    f.write(f"{key}: {attrs[key]}\n")
+            for key in list_keys:
+                if key in attrs:
+                    f.write(f"{key}: {attrs[key]}\n")
+            if target == 'density':
+                for key in ['val_Hs_RMSE', 'val_Hs_Bias', 'val_Tm02_RMSE', 'val_Tm02_Bias',
+                            'val_Shape_RMSE', 'val_Shape_masked_samples', 'val_SI_mean']:
+                    if key in attrs:
+                        f.write(f"{key}: {attrs[key]}\n")
+                if 'val_SI_per_bin' in attrs:
+                    f.write(f"val_SI_per_bin: {attrs['val_SI_per_bin']}\n")
 
         print(f"Results saved to {result_file}")
 

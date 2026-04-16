@@ -32,7 +32,7 @@ def check_time(*dfs):
             return False, f"DataFrame {i} index does not match the first DataFrame."
 
     # Check if the reference index is hourly and without gaps
-    expected_range = pd.date_range(start=ref_index.min(), end=ref_index.max(), freq='H')
+    expected_range = pd.date_range(start=ref_index.min(), end=ref_index.max(), freq='h')
     if not ref_index.equals(expected_range):
         missing = expected_range.difference(ref_index)
         return False, f"Index is not continuous hourly; {len(missing)} missing timestamps."

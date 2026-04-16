@@ -1,14 +1,16 @@
 """Evaluation utilities for the wave forecast transformer model."""
+import numpy as np
 import torch
 from tqdm import tqdm
 from torchmetrics.functional import (
     mean_absolute_percentage_error,
     pearson_corrcoef
 )
-from utils import RMSELoss, get_start_token
+from utils import RMSELoss, get_start_token, compute_bulk_params
 
 
-def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None):
+def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
+             freq_means=None):
     """
     Evaluate model using autoregressive inference.
 
@@ -18,11 +20,18 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None):
     forecast time is used.
 
     Parameters:
-    - model     : PyTorch model with an infer() method
-    - dataloader: DataLoader yielding (X_batch, y_batch)
-    - device    : 'cpu' or 'cuda'
-    - freqs     : frequency tensor required for Hs computation and infer()
-    - lead_time : number of steps to forecast (passed to model.infer)
+    - model      : PyTorch model with an infer() method
+    - dataloader : DataLoader yielding (X_batch, y_batch)
+    - device     : 'cpu' or 'cuda'
+    - freqs      : frequency tensor required for Hs computation and infer()
+    - lead_time  : number of steps to forecast (passed to model.infer)
+    - freq_means : torch.Tensor | None, shape (num_freqs,); per-frequency
+                   training mean μ(f).  When provided, bulk-parameter metrics
+                   (Hs, Tm02, Shape, SI) are computed after denormalising
+                   E = Ẽ * μ(f), so results are in physical units.  Also
+                   forwarded to model.infer() → get_start_token() for
+                   physically correct Hs persistence baselines.  If None,
+                   bulk metrics are skipped entirely.
 
     Returns dict with keys:
         'RMSE'               : overall RMSE (all steps, all samples flattened)
@@ -39,6 +48,35 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None):
         'per_step_Bias'      : list[float], mean error per forecast step
         'per_step_R2'        : list[float], R² per forecast step
         'overall_SS'         : float, Skill Score computed on overall flattened RMSE
+
+    When model.target == 'density' and freq_means is not None, six additional
+    metrics are appended (all in physical units — m²/Hz spectra, metres for
+    Hs, seconds for Tm02 — because predictions are denormalised before any
+    integration):
+
+    Bulk-parameter consistency (spectral moment integration):
+        'Hs_RMSE'            : float, RMSE of Hs = 4√m₀  (predicted vs target)
+        'Hs_Bias'            : float, mean signed error of Hs (predicted − target)
+        'Tm02_RMSE'          : float, RMSE of Tm02 = √(m₀/m₂)
+        'Tm02_Bias'          : float, mean signed error of Tm02 (predicted − target)
+
+    Spectral shape error (energy magnitude removed; normalised by target m₀):
+        'Shape_RMSE'         : float, mean per-spectrum RMSE of E(f)/m₀_target
+                               (averaged over valid spectra, i.e. m₀_target ≥
+                               M0_MASK_THRESHOLD; isolates shape errors from
+                               energy magnitude errors)
+        'Shape_masked_samples': int, number of (sample, step) pairs excluded
+                               because m₀_target was below the threshold
+
+    Per-frequency-bin Scatter Index:
+        'SI_per_bin'         : list[float], length num_freqs; SI[i] =
+                               RMSE(E_pred[:,i], E_target[:,i]) /
+                               mean(E_target[:,i]), computed over all
+                               (sample × step) pairs flattened together;
+                               reveals which parts of the spectrum are hardest
+                               to forecast
+        'SI_mean'            : float, mean of SI_per_bin across all bins;
+                               scalar summary for monitoring
 
     Note on optimization equivalence
     ---------------------------------
@@ -72,7 +110,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None):
             persistence = start_token.unsqueeze(1).expand(-1, y_batch.shape[1], -1)
 
             # Autoregressive model inference — no ground truth in decoder
-            y_pred = model.infer(src, freqs, lead_time)
+            y_pred = model.infer(src, freqs, lead_time, freq_means=freq_means)
 
             all_preds.append(y_pred.cpu())
             all_targets.append(y_batch.cpu())
@@ -124,6 +162,77 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None):
     ss_tot     = ((y_true_flat - y_true_flat.mean()) ** 2).sum()
     r2         = (1.0 - ss_res / ss_tot).item() if ss_tot > 0 else float('nan')
 
+    # Density-target-only metrics — bulk parameters, spectral shape, and SI.
+    # All integrations must operate on physical spectral density E (m² Hz⁻¹),
+    # not on the normalised form Ẽ = E / μ(f) stored in the dataloader.
+    # Denormalisation is E = Ẽ * μ(f) applied once here before every metric.
+    #
+    # M0_MASK_THRESHOLD is in physical units (m²): (sample, step) pairs whose
+    # target m₀ is below this value are excluded from Shape_RMSE to avoid
+    # dividing a near-zero denominator.  Typical open-ocean m₀ is O(0.01–1 m²);
+    # 1e-4 m² (Hs ≈ 4 cm) excludes only genuinely calm or missing records.
+    M0_MASK_THRESHOLD = 1e-4   # m²
+
+    bulk = {}
+    if model.target == 'density' and freqs is not None and freq_means is not None:
+        freqs_np = freqs.cpu().numpy()                        # (num_freqs,)
+        fm_np    = freq_means.cpu().numpy()                   # (num_freqs,)
+
+        # Denormalise: E_phys = Ẽ * μ(f);  shape (batch, lead_time, num_freqs)
+        pred_np = y_pred_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
+        true_np = y_true_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
+
+        # --- Bulk parameter consistency ---
+        # compute_bulk_params uses torch.trapezoid-equivalent trapezoidal
+        # integration over the actual (log-spaced) frequency grid.
+        hs_pred, tm02_pred = compute_bulk_params(pred_np, freqs_np)
+        hs_true, tm02_true = compute_bulk_params(true_np, freqs_np)
+
+        hs_err   = hs_pred   - hs_true   # (batch, lead_time), metres
+        tm02_err = tm02_pred - tm02_true  # (batch, lead_time), seconds
+
+        # --- Spectral shape error ---
+        # Normalise both pred and true by the TARGET physical m₀ so that shape
+        # errors are decoupled from energy magnitude errors.
+        m0_true = np.trapezoid(true_np, freqs_np, axis=2)   # (batch, lead_time), m²
+        valid    = m0_true >= M0_MASK_THRESHOLD               # (batch, lead_time) bool
+        n_masked = int((~valid).sum())
+
+        if valid.any():
+            # Replace masked entries with 1.0 before dividing to avoid NaN;
+            # those rows are excluded from the final mean via boolean indexing.
+            m0_denom = np.where(valid, m0_true, 1.0)[:, :, np.newaxis]
+            shape_pred = pred_np / m0_denom   # (batch, lead_time, num_freqs)
+            shape_true = true_np / m0_denom
+
+            per_spectrum_rmse = np.sqrt(
+                ((shape_pred - shape_true) ** 2).mean(axis=2)   # (batch, lead_time)
+            )
+            shape_rmse = float(per_spectrum_rmse[valid].mean())
+        else:
+            shape_rmse = float('nan')
+
+        # --- Per-frequency-bin Scatter Index ---
+        # Flatten to (N, num_freqs) so each bin's RMSE and mean are computed
+        # over all (sample × step) pairs.  SI[i] = RMSE_i / mean(E_true_i).
+        flat_pred = pred_np.reshape(-1, pred_np.shape[2])   # (N, num_freqs)
+        flat_true = true_np.reshape(-1, true_np.shape[2])
+
+        rmse_per_bin = np.sqrt(((flat_pred - flat_true) ** 2).mean(axis=0))  # (num_freqs,)
+        mean_per_bin = flat_true.mean(axis=0).clip(min=1e-12)                # (num_freqs,)
+        si_per_bin   = rmse_per_bin / mean_per_bin                           # (num_freqs,)
+
+        bulk = {
+            'Hs_RMSE'             : float(np.sqrt(np.mean(hs_err   ** 2))),
+            'Hs_Bias'             : float(np.mean(hs_err)),
+            'Tm02_RMSE'           : float(np.sqrt(np.mean(tm02_err ** 2))),
+            'Tm02_Bias'           : float(np.mean(tm02_err)),
+            'Shape_RMSE'          : shape_rmse,
+            'Shape_masked_samples': n_masked,
+            'SI_per_bin'          : si_per_bin.tolist(),
+            'SI_mean'             : float(si_per_bin.mean()),
+        }
+
     return {
         'RMSE'               : rmse,
         'MAPE'               : mape,
@@ -136,4 +245,5 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None):
         'per_step_Bias'      : per_step_bias,
         'per_step_R2'        : per_step_r2,
         'overall_SS'         : overall_ss,
+        **bulk,
     }

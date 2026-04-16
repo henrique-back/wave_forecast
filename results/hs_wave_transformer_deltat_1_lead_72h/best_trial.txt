@@ -1,6 +1,0 @@
-Delta t: 1
-Lead time (steps): 72
-Lead time (hours): 72
-Best trial parameters:
-{'seq_len': 96, 'batch_size': 32, 'lr': 0.0005661790881453668, 'dropout': 0.13964970866733697, 'nhead': 2, 'num_encoder_layers': 3, 'num_decoder_layers': 2, 'embed_dim': 16, 'weight_decay': 0.00045093717426886144}
-Best val mean-step Skill Score: 0.1425696364390352
