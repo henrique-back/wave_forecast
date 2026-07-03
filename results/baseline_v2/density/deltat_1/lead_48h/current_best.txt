@@ -1,0 +1,2 @@
+Best value: -3.3802261352539062
+Best params: {'seq_len': 12, 'batch_size': 64, 'lr': 0.0004764963542138519, 'dropout': 0.16984191492253217, 'head_dim': 16, 'nhead': 4, 'num_encoder_layers': 1, 'num_decoder_layers': 1, 'weight_decay': 0.00392840951347923}

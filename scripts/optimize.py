@@ -1,6 +1,7 @@
 print("Importing packages")
 import sys
 import os
+import subprocess
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pathlib import Path
 import pandas as pd
@@ -19,7 +20,20 @@ set_seed(42)
 # changes in a way that makes old trials incomparable.  A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model.
-STUDY_VERSION = 'v2'
+STUDY_VERSION = 'v3'
+
+# Short slug used as the top-level folder under results/.
+# Change this whenever you start a new experiment (new architecture, new
+# input variables, etc.) so that each run's results are stored separately
+# and can be compared in RESEARCH_LOG.md.
+# Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
+EXPERIMENT_NAME = 'weightedmeanSS_conv_freqemb_v3'
+
+# Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
+EXPERIMENT_DESCRIPTION = (
+    "Transformer with convolutional frontend and frequency-structured embedding. "
+    "Uses weighted mean Skill Score as objective."
+)
 
 # Set parameters
 lead_times_hours = [6, 12, 24, 48]
@@ -35,7 +49,7 @@ n_trials = 50
 #   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
 #   'Shape_RMSE'        negative spectral shape RMSE (density target only)
 #   'SI_mean'           negative mean Scatter Index  (density target only)
-OBJECTIVE_METRIC = 'Shape_RMSE'
+OBJECTIVE_METRIC = 'weighted_mean_SS'
 
 # Process data
 project_root = Path(__file__).resolve().parent.parent
@@ -53,6 +67,20 @@ else:
 
 freqs = get_freqs(density)
 
+# Write experiment metadata once (idempotent — safe to re-run)
+_experiment_dir = Path(__file__).parent.parent / 'results' / EXPERIMENT_NAME
+_experiment_dir.mkdir(parents=True, exist_ok=True)
+_meta_path = _experiment_dir / 'metadata.md'
+if not _meta_path.exists():
+    _meta_path.write_text(
+        f"# Experiment: {EXPERIMENT_NAME}\n\n"
+        f"- **Date**: {pd.Timestamp.now().strftime('%Y-%m-%d')}\n"
+        f"- **Description**: {EXPERIMENT_DESCRIPTION}\n"
+        f"- **STUDY_VERSION**: {STUDY_VERSION}\n"
+        f"- **OBJECTIVE_METRIC**: {OBJECTIVE_METRIC}\n"
+        f"- **Architecture**: (fill in manually)\n"
+    )
+
 deltats = [1]
 for deltat in deltats:
     # Downsample
@@ -68,6 +96,17 @@ for deltat in deltats:
                                                 [lt for lt in lead_times_hours if lt % deltat == 0]):
         print(f"\n=== Optimizing for deltat={deltat}h, lead_time={lead_time_hours}h ({lead_time_steps} steps) ===")
 
+        # Create unique Optuna study name
+        target_folder = f'{target}'
+        deltat_folder = f'deltat_{deltat}'
+        lead_hours = f'lead_{lead_time_hours}h'
+        study_name = f'{target_folder}_{deltat_folder}_{lead_hours}_{STUDY_VERSION}'
+
+        # Folder for results — nested under the experiment name
+        results_folder = (Path(__file__).parent.parent / 'results'
+                          / EXPERIMENT_NAME / target_folder / deltat_folder / lead_hours)
+        results_folder.mkdir(parents=True, exist_ok=True)
+
         # Define objective function
         objective_fn = partial(
             objective,
@@ -78,17 +117,8 @@ for deltat in deltats:
             freqs=freqs,
             lead_time=lead_time_steps,
             target=target,
-            objective_metric=OBJECTIVE_METRIC)
-
-        # Create unique Optuna study name
-        target_folder = f'{target}'
-        deltat_folder = f'deltat_{deltat}'
-        lead_hours = f'lead_{lead_time_hours}h'
-        study_name = f'{target_folder}_{deltat_folder}_{lead_hours}_{STUDY_VERSION}'
-
-        # Folder for results
-        results_folder = Path(__file__).parent.parent / 'results' / target_folder / deltat_folder / lead_hours
-        results_folder.mkdir(parents=True, exist_ok=True)
+            objective_metric=OBJECTIVE_METRIC,
+            results_folder=results_folder)
 
         # Run optuna
         sampler = optuna.samplers.TPESampler(n_startup_trials=20, multivariate=True, seed=42)
@@ -143,3 +173,7 @@ for deltat in deltats:
         fig.write_html(os.path.join(results_folder, 'optimization_history.html'))
 
         print(f"Visualizations saved to {results_folder}")
+
+# Regenerate the research log after all studies finish
+_summarize = Path(__file__).parent / 'summarize_results.py'
+subprocess.run([sys.executable, str(_summarize)], check=False)

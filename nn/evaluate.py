@@ -2,10 +2,7 @@
 import numpy as np
 import torch
 from tqdm import tqdm
-from torchmetrics.functional import (
-    mean_absolute_percentage_error,
-    pearson_corrcoef
-)
+from torchmetrics.functional import pearson_corrcoef
 from utils import RMSELoss, get_start_token, compute_bulk_params
 
 
@@ -35,7 +32,18 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
     Returns dict with keys:
         'RMSE'               : overall RMSE (all steps, all samples flattened)
-        'MAPE'               : overall MAPE (flattened)
+        'Hs_MAPE'            : MAPE (%) of Hs = 4√m₀, predicted vs target,
+                               always in physical metres. For target == 'hs'
+                               this is computed directly on y_pred/y_true
+                               (already physical, per prepare_y). For
+                               target == 'density' it is computed from Hs
+                               derived out of the denormalised spectrum.
+                               Hs is bounded away from zero for this buoy
+                               (min ≈ 0.8 m observed), so unlike a per-bin
+                               spectral MAPE this ratio never blows up.
+                               Comparable to the "accuracy = 100% - MAPE"
+                               metric reported in Hs-forecasting literature
+                               (e.g. Minuzzi & Farina 2023, Londe & Panchang).
         'CC'                 : Pearson correlation (flattened)
         'Bias'               : mean error = mean(pred - true), flattened
         'R2'                 : coefficient of determination, flattened
@@ -49,7 +57,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         'per_step_R2'        : list[float], R² per forecast step
         'overall_SS'         : float, Skill Score computed on overall flattened RMSE
 
-    When model.target == 'density' and freq_means is not None, six additional
+    When model.target == 'density' and freq_means is not None, five additional
     metrics are appended (all in physical units — m²/Hz spectra, metres for
     Hs, seconds for Tm02 — because predictions are denormalised before any
     integration):
@@ -154,13 +162,20 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
     rmse       = rmse_fn(y_pred_flat, y_true_flat).item()
     rmse_pers  = rmse_fn(y_pers_flat, y_true_flat).item()
-    mape       = mean_absolute_percentage_error(y_pred_flat, y_true_flat).item()
     cc         = pearson_corrcoef(y_pred_flat, y_true_flat).item()
     overall_ss = 1.0 - rmse / rmse_pers if rmse_pers > 0 else float('nan')
     bias       = (y_pred_flat - y_true_flat).mean().item()
     ss_res     = ((y_true_flat - y_pred_flat) ** 2).sum()
     ss_tot     = ((y_true_flat - y_true_flat.mean()) ** 2).sum()
     r2         = (1.0 - ss_res / ss_tot).item() if ss_tot > 0 else float('nan')
+
+    # Hs_MAPE: for target == 'hs', y_pred/y_true ARE physical Hs already
+    # (prepare_y computes compute_hs on the raw, non-normalised density
+    # before any scaling is applied). For target == 'density' this is
+    # overwritten below once Hs is derived from the denormalised spectrum.
+    hs_mape = float(100.0 * torch.mean(
+        torch.abs(y_pred_flat - y_true_flat) / torch.abs(y_true_flat)
+    ).item()) if model.target == 'hs' else None
 
     # Density-target-only metrics — bulk parameters, spectral shape, and SI.
     # All integrations must operate on physical spectral density E (m² Hz⁻¹),
@@ -190,6 +205,9 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
         hs_err   = hs_pred   - hs_true   # (batch, lead_time), metres
         tm02_err = tm02_pred - tm02_true  # (batch, lead_time), seconds
+        # Hs is bounded away from zero for this buoy (min ~0.8 m observed),
+        # so this ratio is well-behaved, unlike a per-bin spectral MAPE.
+        hs_mape  = float(100.0 * np.mean(np.abs(hs_err) / np.abs(hs_true)))
 
         # --- Spectral shape error ---
         # Normalise both pred and true by the TARGET physical m₀ so that shape
@@ -225,6 +243,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         bulk = {
             'Hs_RMSE'             : float(np.sqrt(np.mean(hs_err   ** 2))),
             'Hs_Bias'             : float(np.mean(hs_err)),
+            'Hs_MAPE'             : hs_mape,
             'Tm02_RMSE'           : float(np.sqrt(np.mean(tm02_err ** 2))),
             'Tm02_Bias'           : float(np.mean(tm02_err)),
             'Shape_RMSE'          : shape_rmse,
@@ -235,7 +254,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
     return {
         'RMSE'               : rmse,
-        'MAPE'               : mape,
+        'Hs_MAPE'            : hs_mape,
         'CC'                 : cc,
         'Bias'               : bias,
         'R2'                 : r2,
