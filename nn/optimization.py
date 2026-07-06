@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from nn import WaveSpectralDataset, WaveHeightBaselineNN, prepare_X, prepare_y, train_one_epoch, evaluate
-from utils import set_seed
+from utils import set_seed, get_device, empty_cache
 
 
 def _seed_worker(worker_id):
@@ -285,7 +285,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         shuffle_seed=trial.number)
 
     # --- Model ---
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = get_device()
     print(f'Running on device: {device}')
 
     model = WaveHeightBaselineNN(
@@ -311,7 +311,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         # frame (and its tensors) alive and the freed memory never reaches
         # the allocator, starving the next trial too.
         del model
-        torch.cuda.empty_cache()
+        empty_cache(device)
         raise
 
     # Checkpoint the model whenever this trial beats every trial completed so

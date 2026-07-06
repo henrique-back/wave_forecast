@@ -10,10 +10,12 @@ writes a checkpoint + full metrics (val and test) back into that same folder.
 Run manually:
     python scripts/train.py
 """
+
 print("Importing packages")
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import ast
 import json
 import re
@@ -23,7 +25,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from utils import get_freqs, set_seed
+from utils import get_freqs, set_seed, get_device
 from nn import WaveHeightBaselineNN, evaluate
 from nn.optimization import _prepare_dataloaders, _train_model
 
@@ -35,16 +37,16 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/deltat_{N}/lead_{N}h/.
-EXPERIMENT_NAME = 'weightedmeanSS_conv_freqemb_v3'
+EXPERIMENT_NAME = "weightedmeanSS_conv_freqemb_v4"
 
-target = 'density'
+target = "density"
 deltats = [1]
-lead_times_hours = [6, 12, 24, 48]
+lead_times_hours = [48]
 
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
 # retrained model is selected the same way the search selected it.
-OBJECTIVE_METRIC = 'weighted_mean_SS'
+OBJECTIVE_METRIC = "weighted_mean_SS"
 
 # Seeds to retrain with. A single seed trains one final model. Add more to
 # get a mean±std noise estimate across independent weight initializations and
@@ -59,13 +61,17 @@ PATIENCE = 10
 
 def parse_best_trial(path: Path) -> dict:
     text = path.read_text()
-    deltat = int(re.search(r'Delta t: (\d+)', text).group(1))
-    lead_steps = int(re.search(r'Lead time \(steps\): (\d+)', text).group(1))
-    lead_hours = int(re.search(r'Lead time \(hours\): (\d+)', text).group(1))
-    params_line = re.search(r'Best trial parameters:\n(.+)\n', text).group(1)
+    deltat = int(re.search(r"Delta t: (\d+)", text).group(1))
+    lead_steps = int(re.search(r"Lead time \(steps\): (\d+)", text).group(1))
+    lead_hours = int(re.search(r"Lead time \(hours\): (\d+)", text).group(1))
+    params_line = re.search(r"Best trial parameters:\n(.+)\n", text).group(1)
     params = ast.literal_eval(params_line)
-    return {'deltat': deltat, 'lead_time_steps': lead_steps,
-            'lead_time_hours': lead_hours, 'params': params}
+    return {
+        "deltat": deltat,
+        "lead_time_steps": lead_steps,
+        "lead_time_hours": lead_hours,
+        "params": params,
+    }
 
 
 def _aggregate_metrics(metrics_list: list[dict]) -> dict:
@@ -75,11 +81,15 @@ def _aggregate_metrics(metrics_list: list[dict]) -> dict:
         values = [m[key] for m in metrics_list]
         if isinstance(values[0], list):
             arr = np.array(values, dtype=float)  # (n_seeds, n_steps)
-            agg[key] = {'mean': np.nanmean(arr, axis=0).tolist(),
-                        'std': np.nanstd(arr, axis=0).tolist()}
+            agg[key] = {
+                "mean": np.nanmean(arr, axis=0).tolist(),
+                "std": np.nanstd(arr, axis=0).tolist(),
+            }
         elif isinstance(values[0], (int, float)) or values[0] is None:
-            arr = np.array([v if v is not None else np.nan for v in values], dtype=float)
-            agg[key] = {'mean': float(np.nanmean(arr)), 'std': float(np.nanstd(arr))}
+            arr = np.array(
+                [v if v is not None else np.nan for v in values], dtype=float
+            )
+            agg[key] = {"mean": float(np.nanmean(arr)), "std": float(np.nanstd(arr))}
         else:
             agg[key] = values
     return agg
@@ -90,13 +100,14 @@ def main():
     file_path = project_root / "buoy_data" / "processed_data.pkl"
     if not file_path.exists():
         raise FileNotFoundError(
-            f"{file_path} not found — run scripts/data_processing.py first.")
+            f"{file_path} not found — run scripts/data_processing.py first."
+        )
     density, alpha_1, alpha_2, r_1 = pd.read_pickle(file_path)
     print("Loaded preprocessed wave spectral data")
 
     freqs = get_freqs(density)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f'Running on device: {device}')
+    device = get_device()
+    print(f"Running on device: {device}")
 
     for deltat in deltats:
         density_d = density[::deltat]
@@ -108,20 +119,30 @@ def main():
             if lead_time_hours % deltat != 0:
                 continue
 
-            results_folder = (project_root / 'results' / EXPERIMENT_NAME / target
-                              / f'deltat_{deltat}' / f'lead_{lead_time_hours}h')
-            best_trial_path = results_folder / 'best_trial.txt'
+            results_folder = (
+                project_root
+                / "results"
+                / EXPERIMENT_NAME
+                / target
+                / f"deltat_{deltat}"
+                / f"lead_{lead_time_hours}h"
+            )
+            best_trial_path = results_folder / "best_trial.txt"
             if not best_trial_path.exists():
-                print(f"Skipping deltat={deltat}, lead={lead_time_hours}h — "
-                      f"no best_trial.txt at {best_trial_path}")
+                print(
+                    f"Skipping deltat={deltat}, lead={lead_time_hours}h — "
+                    f"no best_trial.txt at {best_trial_path}"
+                )
                 continue
 
             trial_info = parse_best_trial(best_trial_path)
-            params = trial_info['params']
-            lead_time_steps = trial_info['lead_time_steps']
-            embed_dim = params['head_dim'] * params['nhead']
-            print(f"\n=== Retraining deltat={deltat}, lead={lead_time_hours}h "
-                  f"({lead_time_steps} steps) — params: {params} ===")
+            params = trial_info["params"]
+            lead_time_steps = trial_info["lead_time_steps"]
+            embed_dim = params["head_dim"] * params["nhead"]
+            print(
+                f"\n=== Retraining deltat={deltat}, lead={lead_time_hours}h "
+                f"({lead_time_steps} steps) — params: {params} ==="
+            )
 
             val_metrics_per_seed = []
             test_metrics_per_seed = []
@@ -130,73 +151,110 @@ def main():
                 print(f"\n--- Seed {seed} ---")
                 set_seed(seed)
 
-                train_loader, val_loader, test_loader, freq_means, num_freqs = _prepare_dataloaders(
-                    density_d, alpha_1_d, alpha_2_d, r_1_d,
-                    params['seq_len'], lead_time_steps, params['batch_size'],
-                    target, shuffle_seed=seed)
+                train_loader, val_loader, test_loader, freq_means, num_freqs = (
+                    _prepare_dataloaders(
+                        density_d,
+                        alpha_1_d,
+                        alpha_2_d,
+                        r_1_d,
+                        params["seq_len"],
+                        lead_time_steps,
+                        params["batch_size"],
+                        target,
+                        shuffle_seed=seed,
+                    )
+                )
 
                 model = WaveHeightBaselineNN(
                     num_freqs=num_freqs,
                     freqs=freqs,
                     target=target,
-                    dropout=params['dropout'],
-                    nhead=params['nhead'],
-                    num_encoder_layers=params['num_encoder_layers'],
-                    num_decoder_layers=params['num_decoder_layers'],
+                    dropout=params["dropout"],
+                    nhead=params["nhead"],
+                    num_encoder_layers=params["num_encoder_layers"],
+                    num_decoder_layers=params["num_decoder_layers"],
                     embed_dim=embed_dim,
                 ).to(device)
 
                 best_val_score, best_val_metrics, best_model_state = _train_model(
-                    model, train_loader, val_loader, device, freqs, freq_means,
-                    target, lead_time_steps, params['lr'], params['weight_decay'],
-                    OBJECTIVE_METRIC, num_epochs=NUM_EPOCHS, patience=PATIENCE, trial=None)
+                    model,
+                    train_loader,
+                    val_loader,
+                    device,
+                    freqs,
+                    freq_means,
+                    target,
+                    lead_time_steps,
+                    params["lr"],
+                    params["weight_decay"],
+                    OBJECTIVE_METRIC,
+                    num_epochs=NUM_EPOCHS,
+                    patience=PATIENCE,
+                    trial=None,
+                )
 
                 if best_model_state is not None:
                     model.load_state_dict(best_model_state)
 
-                test_metrics = evaluate(model, test_loader, device, freqs,
-                                        lead_time=lead_time_steps, freq_means=freq_means)
-                print(f"Seed {seed} — best val {OBJECTIVE_METRIC}: {best_val_score:.4f} | "
-                      f"test RMSE: {test_metrics['RMSE']:.4f} | "
-                      f"test overall_SS: {test_metrics['overall_SS']:.4f}")
+                test_metrics = evaluate(
+                    model,
+                    test_loader,
+                    device,
+                    freqs,
+                    lead_time=lead_time_steps,
+                    freq_means=freq_means,
+                )
+                print(
+                    f"Seed {seed} — best val {OBJECTIVE_METRIC}: {best_val_score:.4f} | "
+                    f"test RMSE: {test_metrics['RMSE']:.4f} | "
+                    f"test overall_SS: {test_metrics['overall_SS']:.4f}"
+                )
 
                 val_metrics_per_seed.append(best_val_metrics)
                 test_metrics_per_seed.append(test_metrics)
 
-                checkpoint_path = results_folder / f'final_model_seed{seed}.pt'
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'params': params,
-                    'target': target,
-                    'deltat': deltat,
-                    'lead_time_steps': lead_time_steps,
-                    'lead_time_hours': lead_time_hours,
-                    'seed': seed,
-                    'freq_means': freq_means,
-                    'freqs': freqs,
-                }, checkpoint_path)
+                checkpoint_path = results_folder / f"final_model_seed{seed}.pt"
+                torch.save(
+                    {
+                        "model_state_dict": model.state_dict(),
+                        "params": params,
+                        "target": target,
+                        "deltat": deltat,
+                        "lead_time_steps": lead_time_steps,
+                        "lead_time_hours": lead_time_hours,
+                        "seed": seed,
+                        "freq_means": freq_means,
+                        "freqs": freqs,
+                    },
+                    checkpoint_path,
+                )
 
-                metrics_path = results_folder / f'final_metrics_seed{seed}.json'
-                metrics_path.write_text(json.dumps({
-                    'seed': seed,
-                    'params': params,
-                    'val_metrics': best_val_metrics,
-                    'test_metrics': test_metrics,
-                }, indent=2))
+                metrics_path = results_folder / f"final_metrics_seed{seed}.json"
+                metrics_path.write_text(
+                    json.dumps(
+                        {
+                            "seed": seed,
+                            "params": params,
+                            "val_metrics": best_val_metrics,
+                            "test_metrics": test_metrics,
+                        },
+                        indent=2,
+                    )
+                )
                 print(f"Saved checkpoint → {checkpoint_path}")
                 print(f"Saved metrics → {metrics_path}")
 
             if len(SEEDS) > 1:
                 summary = {
-                    'seeds': SEEDS,
-                    'params': params,
-                    'val_metrics': _aggregate_metrics(val_metrics_per_seed),
-                    'test_metrics': _aggregate_metrics(test_metrics_per_seed),
+                    "seeds": SEEDS,
+                    "params": params,
+                    "val_metrics": _aggregate_metrics(val_metrics_per_seed),
+                    "test_metrics": _aggregate_metrics(test_metrics_per_seed),
                 }
-                summary_path = results_folder / 'final_metrics_summary.json'
+                summary_path = results_folder / "final_metrics_summary.json"
                 summary_path.write_text(json.dumps(summary, indent=2))
                 print(f"Saved {len(SEEDS)}-seed summary → {summary_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

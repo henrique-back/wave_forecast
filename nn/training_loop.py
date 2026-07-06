@@ -48,11 +48,15 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
             # prediction with probability (1 - tf_ratio).  This closes the gap
             # between teacher-forced training and autoregressive evaluation.
             lead_time = y_batch.shape[1]
+            # src never changes across decode steps — encode it once and
+            # reuse across the loop instead of re-running the encoder at
+            # every step (see WaveHeightBaselineNN.encode/decode).
+            memory = model.encode(src)
             decoder_input = start_token.unsqueeze(1)  # (batch, 1, output_dim)
             all_preds = []
 
             for t in range(lead_time):
-                preds = model(src, decoder_input)     # (batch, t+1, output_dim)
+                preds = model.decode(decoder_input, memory)  # (batch, t+1, output_dim)
                 pred_t = preds[:, -1:, :]             # (batch, 1, output_dim)
                 all_preds.append(pred_t)
 

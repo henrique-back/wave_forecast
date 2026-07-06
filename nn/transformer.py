@@ -78,29 +78,34 @@ class WaveHeightBaselineNN(nn.Module):
         self.predictor = nn.Linear(embed_dim, output_dim)
 
 
-    def forward(self, src, tgt):
+    def encode(self, src):
         # src: (batch_size, src_seq_len, num_freqs, num_channels)
-        # tgt: (batch_size, tgt_seq_len, 1 or num_freqs)
-        batch_size = src.size(0)
-
-        # Encoder: structured frequency embedding → PE → temporal conv
+        # Structured frequency embedding → PE → temporal conv → self-attention.
+        # Depends only on src, so callers doing multi-step autoregressive
+        # decoding should call this once and reuse the returned memory —
+        # see infer() below and training_loop.py's scheduled-sampling branch.
         src = self.encoder_embedding(src)   # (batch, src_seq_len, embed_dim)
         src = self.pos_encoder(src)
         src = self.temporal_conv(src)
+        return self.transformer.encoder(src)
 
-        # Decoder: flat embedding → PE (no temporal conv — sequence is short)
+    def decode(self, tgt, memory):
+        # tgt: (batch_size, tgt_seq_len, 1 or num_freqs)
+        # memory: encoder output from encode(), (batch, src_seq_len, embed_dim)
         tgt = self.decoder_embedding(tgt)   # (batch, tgt_seq_len, embed_dim)
         tgt = self.pos_encoder(tgt)
 
         # Causal mask for decoder
-        tgt_seq_len = tgt.size(1)
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(
-            tgt_seq_len
+            tgt.size(1)
         ).to(tgt.device)
 
-        output = self.transformer(src, tgt, tgt_mask=tgt_mask)
-        output = self.predictor(output)     # (batch, tgt_seq_len, output_dim)
-        return output
+        output = self.transformer.decoder(tgt, memory, tgt_mask=tgt_mask)
+        return self.predictor(output)       # (batch, tgt_seq_len, output_dim)
+
+    def forward(self, src, tgt):
+        memory = self.encode(src)
+        return self.decode(tgt, memory)
 
 
     @torch.no_grad()
@@ -122,6 +127,11 @@ class WaveHeightBaselineNN(nn.Module):
         batch_size = src.size(0)
         output_dim = 1 if self.target == 'hs' else self.num_freqs
 
+        # Encode src once — it never changes across decode steps, so caching
+        # memory here avoids re-running the encoder (embedding, PE, temporal
+        # conv, self-attention) lead_time times.
+        memory = self.encode(src)
+
         output = torch.zeros((batch_size, lead_time + 1, output_dim),
                              device=src.device)
 
@@ -130,7 +140,11 @@ class WaveHeightBaselineNN(nn.Module):
         output[:, 0] = start_token
 
         for i in range(lead_time):
-            preds = self.forward(src, output)
+            # Growing slice, not the full padded tensor: the causal mask
+            # already blocks position i from seeing positions > i, so the
+            # zero-padded tail beyond i+1 never influenced preds[:, i] — this
+            # is just less work to get the same result.
+            preds = self.decode(output[:, :i + 1], memory)
             output[:, i + 1] = preds[:, i]
 
         return output[:, 1:]

@@ -22,7 +22,7 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 
-from utils import get_freqs, compute_bulk_params, get_start_token
+from utils import get_freqs, compute_bulk_params, get_start_token, get_device
 from nn import WaveHeightBaselineNN
 from nn.optimization import _prepare_dataloaders
 
@@ -150,7 +150,7 @@ def main():
     ckpt, results_folder = load_checkpoint(args.experiment, args.target, args.deltat,
                                             args.lead, args.seed, project_root)
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = get_device()
     model = build_model(ckpt, freqs, device)
     freq_means = ckpt['freq_means'].to(device)
     lead_time_steps = ckpt['lead_time_steps']

@@ -5,6 +5,7 @@ from .compute_hs import compute_hs_from_density as compute_hs, compute_bulk_para
 from .set_seed import set_seed
 from .get_start_token import get_start_token
 from .get_freqs import get_freqs
+from .get_device import get_device, empty_cache
 from .data_processing import data_processing
 from .save_progress import save_progress
 from .loss import RMSELoss
