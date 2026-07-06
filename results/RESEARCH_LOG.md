@@ -32,7 +32,7 @@
 | Objective | weighted_mean_SS |
 | Study version | v3 |
 | Architecture | (fill in manually) |
-| Description | Transformer with convolutional frontend and frequency-structured embedding. Uses weighted mean Skill Score as objective. |
+| Description | Transformer with convolutional frontend and frequency-structured embedding. Uses weighted mean Skill Score as objective. Note: 48h best_trial.txt not written (memory overflow), v_4 ran the same architecture with the fix for memory (limited batch_size as a function of lead_time)|
 
 | Metric | 6h | 12h | 24h |
 |:-------|------:|------:|------:|

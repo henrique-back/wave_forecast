@@ -37,11 +37,11 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/deltat_{N}/lead_{N}h/.
-EXPERIMENT_NAME = "weightedmeanSS_conv_freqemb_v4"
+EXPERIMENT_NAME = "weightedmeanSS_conv_freqemb_v3"
 
 target = "density"
 deltats = [1]
-lead_times_hours = [48]
+lead_times_hours = [24]
 
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
