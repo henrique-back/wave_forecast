@@ -18,6 +18,7 @@ class WaveHeightBaselineNN(nn.Module):
                 num_freqs,
                 target='hs',
                 num_channels=4,
+                num_aux_channels=0,
                 nhead=2,
                 num_encoder_layers=2,
                 num_decoder_layers=2,
@@ -30,6 +31,7 @@ class WaveHeightBaselineNN(nn.Module):
 
         self.num_freqs = num_freqs
         self.num_channels = num_channels
+        self.num_aux_channels = num_aux_channels
         self.embed_dim = embed_dim
         self.target = target
 
@@ -51,6 +53,17 @@ class WaveHeightBaselineNN(nn.Module):
         # (num_freqs-dim, single channel) — no multi-channel structure here.
         self.decoder_embedding = Embedding(
             1 if self.target == 'hs' else num_freqs, embed_dim
+        )
+
+        # ── Auxiliary side-input (e.g. wind) ─────────────────────────────────
+        # Scalar-per-timestep channels are NOT frequency-resolved, so they
+        # never go through encoder_embedding's per-freq-bin structure. Instead
+        # they're embedded separately and added additively into the encoder
+        # token (same convention positional encoding already uses), before PE.
+        # Encoder-only: aux never reaches the decoder or get_start_token,
+        # since it is never a forecast target.
+        self.aux_embedding = (
+            nn.Linear(num_aux_channels, embed_dim) if num_aux_channels > 0 else None
         )
 
         # ── Positional encoding (shared between encoder and decoder) ─────────
@@ -78,13 +91,16 @@ class WaveHeightBaselineNN(nn.Module):
         self.predictor = nn.Linear(embed_dim, output_dim)
 
 
-    def encode(self, src):
+    def encode(self, src, aux=None):
         # src: (batch_size, src_seq_len, num_freqs, num_channels)
+        # aux: (batch_size, src_seq_len, num_aux_channels) | None — e.g. wind
         # Structured frequency embedding → PE → temporal conv → self-attention.
-        # Depends only on src, so callers doing multi-step autoregressive
+        # Depends only on src/aux, so callers doing multi-step autoregressive
         # decoding should call this once and reuse the returned memory —
         # see infer() below and training_loop.py's scheduled-sampling branch.
         src = self.encoder_embedding(src)   # (batch, src_seq_len, embed_dim)
+        if self.aux_embedding is not None:
+            src = src + self.aux_embedding(aux)
         src = self.pos_encoder(src)
         src = self.temporal_conv(src)
         return self.transformer.encoder(src)
@@ -103,13 +119,13 @@ class WaveHeightBaselineNN(nn.Module):
         output = self.transformer.decoder(tgt, memory, tgt_mask=tgt_mask)
         return self.predictor(output)       # (batch, tgt_seq_len, output_dim)
 
-    def forward(self, src, tgt):
-        memory = self.encode(src)
+    def forward(self, src, tgt, aux=None):
+        memory = self.encode(src, aux=aux)
         return self.decode(tgt, memory)
 
 
     @torch.no_grad()
-    def infer(self, src, freqs, lead_time, freq_means=None):
+    def infer(self, src, freqs, lead_time, freq_means=None, aux=None):
         """Autoregressive inference for multi-step forecasting.
 
         Args:
@@ -120,6 +136,8 @@ class WaveHeightBaselineNN(nn.Module):
                          mean μ(f) used to denormalise the spectrum before computing
                          the Hs start token (required for physically correct Hs when
                          target == 'hs'; unused for density target)
+            aux        : torch.Tensor | None [batch_size, src_seq_len, num_aux_channels]
+                         — auxiliary encoder side-input (e.g. wind_u/wind_v)
 
         Returns:
             torch.Tensor: Forecasted sequence [batch_size, lead_time, output_dim]
@@ -130,7 +148,7 @@ class WaveHeightBaselineNN(nn.Module):
         # Encode src once — it never changes across decode steps, so caching
         # memory here avoids re-running the encoder (embedding, PE, temporal
         # conv, self-attention) lead_time times.
-        memory = self.encode(src)
+        memory = self.encode(src, aux=aux)
 
         output = torch.zeros((batch_size, lead_time + 1, output_dim),
                              device=src.device)

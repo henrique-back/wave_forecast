@@ -68,6 +68,8 @@ def read_metadata(exp_dir: Path) -> dict:
         ('Description',      'description'),
         ('OBJECTIVE_METRIC', 'objective'),
         ('STUDY_VERSION',    'study_version'),
+        ('CHANNEL_SET',      'channel_set'),
+        ('AUX_SET',          'aux_set'),
         ('Architecture',     'architecture'),
     ]:
         m = re.search(rf'\*\*{field}\*\*[:\s]+(.+)', text)
@@ -141,6 +143,8 @@ def build_log(experiments: list) -> str:
         lines.append(f'| Date | {meta.get("date", "?")} |')
         lines.append(f'| Objective | {meta.get("objective", "?")} |')
         lines.append(f'| Study version | {meta.get("study_version", "?")} |')
+        lines.append(f'| Channel set | {meta.get("channel_set", "?")} |')
+        lines.append(f'| Aux set | {meta.get("aux_set", "?")} |')
         lines.append(f'| Architecture | {meta.get("architecture", "?")} |')
         lines.append(f'| Description | {meta.get("description", "?")} |')
         lines.append('')

@@ -5,7 +5,8 @@ import optuna
 import torch
 from torch.utils.data import DataLoader
 import torch.optim as optim
-from nn import WaveSpectralDataset, WaveHeightBaselineNN, prepare_X, prepare_y, train_one_epoch, evaluate
+from nn import WaveSpectralDataset, WaveHeightBaselineNN, prepare_X, prepare_aux, prepare_y, train_one_epoch, evaluate
+from nn.channels import CHANNEL_SETS, NORM_MODES, AUX_CHANNEL_SETS, AUX_NORM_MODES
 from utils import set_seed, get_device, empty_cache
 
 
@@ -167,15 +168,22 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
 
 
 def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, batch_size,
-                          target, shuffle_seed):
-    """Split, normalise, and window the four spectral channels into DataLoaders.
+                          target, shuffle_seed, wind=None, channel_set='full', aux_set='none'):
+    """Split, normalise, and window the spectral (+ optional aux) channels into DataLoaders.
 
     Shared by objective() and scripts/train.py so the train/val/test split and
     normalisation are always computed identically for a given (seq_len,
     lead_time, target) — a final retrain must see exactly the same splits the
     hyperparameter search saw for its metrics to be comparable.
 
-    Returns (train_loader, val_loader, test_loader, freq_means, num_freqs).
+    channel_set selects which frequency-resolved channels (nn.channels.CHANNEL_SETS)
+    are stacked into the encoder input via prepare_X. aux_set selects which
+    scalar-per-timestep side channels (nn.channels.AUX_CHANNEL_SETS, e.g. wind)
+    are fused into the encoder separately via prepare_aux — wind is required
+    (non-None) whenever aux_set != 'none'.
+
+    Returns (train_loader, val_loader, test_loader, freq_means, num_freqs,
+    num_channels, num_aux_channels).
     freq_means is the per-frequency training-split mean μ(f) — the
     denormalisation key E_phys = Ẽ * μ(f) used throughout training/eval.
     """
@@ -212,41 +220,80 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
     # Normalize inputs — fit on training data, apply to all splits.
     # Density uses scale-only normalization (divide by per-frequency training mean)
     # to preserve non-negativity: compute_hs calls sqrt(trapz(density)) and would
-    # produce NaN if density went negative from z-scoring.
-    # Alpha and r1 have no downstream physical constraint so z-score is safe.
+    # produce NaN if density went negative from z-scoring. Density is always
+    # normalised regardless of channel_set since it's also used for the
+    # density-target y and is always included in every CHANNEL_SETS entry.
     train_density, val_density, test_density = _normalize(
-        train_density, val_density, test_density, mode='scale')
-    train_alpha1, val_alpha1, test_alpha_1 = _normalize(train_alpha1, val_alpha1, test_alpha_1)
-    train_alpha2, val_alpha2, test_alpha_2 = _normalize(train_alpha2, val_alpha2, test_alpha_2)
-    train_r1, val_r1, test_r1             = _normalize(train_r1, val_r1, test_r1)
+        train_density, val_density, test_density, mode=NORM_MODES['density'])
 
-    # Encoder input sequences always use normalised density.
-    train_X = prepare_X(train_density, train_alpha1, train_alpha2, train_r1, seq_len, lead_time)
-    val_X   = prepare_X(val_density,   val_alpha1,   val_alpha2,   val_r1,   seq_len, lead_time)
-    test_X  = prepare_X(test_density,  test_alpha_1, test_alpha_2, test_r1,  seq_len, lead_time)
+    # Alpha/r1 have no downstream physical constraint so z-score is safe. Only
+    # normalise the ones this channel_set actually needs.
+    channel_names = CHANNEL_SETS[channel_set]
+    raw_channels = {
+        'density': (train_density, val_density, test_density),
+        'alpha_1': (train_alpha1, val_alpha1, test_alpha_1),
+        'alpha_2': (train_alpha2, val_alpha2, test_alpha_2),
+        'r_1':     (train_r1, val_r1, test_r1),
+    }
+    normalized = {'density': (train_density, val_density, test_density)}
+    for name in channel_names:
+        if name == 'density':
+            continue
+        normalized[name] = _normalize(*raw_channels[name], mode=NORM_MODES[name])
+
+    train_X = prepare_X([normalized[name][0] for name in channel_names], seq_len, lead_time)
+    val_X   = prepare_X([normalized[name][1] for name in channel_names], seq_len, lead_time)
+    test_X  = prepare_X([normalized[name][2] for name in channel_names], seq_len, lead_time)
+    num_channels = len(channel_names)
 
     if target == 'density':
         train_y = prepare_y(train_density, seq_len, lead_time, target='density')
         val_y   = prepare_y(val_density,   seq_len, lead_time, target='density')
         test_y  = prepare_y(test_density,  seq_len, lead_time, target='density')
 
+    # Auxiliary side-input (e.g. wind) — scalar-per-timestep, not frequency-
+    # resolved, so it is windowed via prepare_aux (no freq axis) rather than
+    # prepare_X, and fused into the encoder separately (see WaveHeightBaselineNN).
+    aux_names = AUX_CHANNEL_SETS[aux_set]
+    num_aux_channels = len(aux_names)
+    if aux_names:
+        if wind is None:
+            raise ValueError(f"aux_set={aux_set!r} requires a wind dataframe")
+        train_wind = wind[:train_end]
+        val_wind   = wind[train_end:val_end]
+        test_wind  = wind[val_end:]
+        normalized_aux = {
+            name: _normalize(train_wind[[name]], val_wind[[name]], test_wind[[name]],
+                              mode=AUX_NORM_MODES[name])
+            for name in aux_names
+        }
+        train_aux = prepare_aux([normalized_aux[name][0][name] for name in aux_names], len(train_density), seq_len, lead_time)
+        val_aux   = prepare_aux([normalized_aux[name][1][name] for name in aux_names], len(val_density),   seq_len, lead_time)
+        test_aux  = prepare_aux([normalized_aux[name][2][name] for name in aux_names], len(test_density),  seq_len, lead_time)
+    else:
+        train_aux = prepare_aux([], len(train_density), seq_len, lead_time)
+        val_aux   = prepare_aux([], len(val_density),   seq_len, lead_time)
+        test_aux  = prepare_aux([], len(test_density),  seq_len, lead_time)
+
     # DataLoaders — generator seeded explicitly so shuffle order is reproducible
     # for a given shuffle_seed (trial.number during HPO; a chosen seed during
     # final retrain).
     g = torch.Generator()
     g.manual_seed(shuffle_seed)
-    train_loader = DataLoader(WaveSpectralDataset(train_X, train_y), batch_size=batch_size, shuffle=True,
+    train_loader = DataLoader(WaveSpectralDataset(train_X, train_aux, train_y), batch_size=batch_size, shuffle=True,
                               worker_init_fn=_seed_worker, generator=g)
-    val_loader   = DataLoader(WaveSpectralDataset(val_X, val_y), batch_size=batch_size, shuffle=False,
+    val_loader   = DataLoader(WaveSpectralDataset(val_X, val_aux, val_y), batch_size=batch_size, shuffle=False,
                               worker_init_fn=_seed_worker, generator=g)
-    test_loader  = DataLoader(WaveSpectralDataset(test_X, test_y), batch_size=batch_size, shuffle=False,
+    test_loader  = DataLoader(WaveSpectralDataset(test_X, test_aux, test_y), batch_size=batch_size, shuffle=False,
                               worker_init_fn=_seed_worker, generator=g)
 
-    return train_loader, val_loader, test_loader, freq_means, train_X.shape[2]
+    return (train_loader, val_loader, test_loader, freq_means, train_X.shape[2],
+            num_channels, num_aux_channels)
 
 
 def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target,
-              objective_metric='weighted_mean_SS', results_folder=None):
+              objective_metric='weighted_mean_SS', results_folder=None,
+              wind=None, channel_set='full', aux_set='none'):
     # set_seed() is called once at script level — do NOT call it here.
     # Resetting the RNG inside objective() makes every trial start from the same
     # random state, collapsing the variance Optuna needs to learn from.
@@ -256,9 +303,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     # The scheduled-sampling training loop (train_one_epoch) unrolls one
     # forward pass per decoder step and only backpropagates once at the end,
     # so its memory footprint grows ~quadratically with lead_time. Cap
-    # batch_size for longer horizons to avoid CUDA OOM (see lead_48h Trial 1,
-    # 2026-07-03: batch_size=128 + embed_dim=256 OOM'd on a 32GiB GPU as soon
-    # as tf_ratio<1.0 activated the scheduled-sampling branch).
+    # batch_size for longer horizons to avoid CUDA OOM
     batch_size_choices = [32, 64] if lead_time > 24 else [32, 64, 128]
     batch_size = trial.suggest_categorical('batch_size', batch_size_choices)
     lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
@@ -280,9 +325,11 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     # --- Data preparation ---
     # DataLoader shuffle seeded per trial (using trial.number) so shuffle order
     # differs between trials while remaining reproducible within each trial.
-    train_loader, val_loader, test_loader, freq_means, num_freqs = _prepare_dataloaders(
-        density, alpha_1, alpha_2, r_1, seq_len, lead_time, batch_size, target,
-        shuffle_seed=trial.number)
+    train_loader, val_loader, test_loader, freq_means, num_freqs, num_channels, num_aux_channels = (
+        _prepare_dataloaders(
+            density, alpha_1, alpha_2, r_1, seq_len, lead_time, batch_size, target,
+            shuffle_seed=trial.number, wind=wind, channel_set=channel_set, aux_set=aux_set)
+    )
 
     # --- Model ---
     device = get_device()
@@ -292,6 +339,8 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         num_freqs=num_freqs,
         freqs=freqs,
         target=target,
+        num_channels=num_channels,
+        num_aux_channels=num_aux_channels,
         dropout=dropout,
         nhead=nhead,
         num_encoder_layers=num_encoder_layers,

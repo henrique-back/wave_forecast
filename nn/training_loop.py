@@ -25,8 +25,9 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
 
     loop = tqdm(dataloader, desc='Training', leave=False)
 
-    for src, y_batch in loop:
+    for src, aux, y_batch in loop:
         src = src.to(device)  # Encoder input
+        aux = aux.to(device)  # Auxiliary encoder side-input (e.g. wind), may be zero-width
         y_batch = y_batch.to(device)  # Ground truth future sequence
 
         if model.target == 'hs' and y_batch.dim() == 2:
@@ -41,7 +42,7 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
             tgt = torch.zeros_like(y_batch).to(device)
             tgt[:, 0, :] = start_token
             tgt[:, 1:, :] = y_batch[:, :-1, :]
-            y_pred = model(src, tgt)
+            y_pred = model(src, tgt, aux=aux)
         else:
             # Scheduled sampling: at each step, feed the ground-truth previous
             # token with probability tf_ratio, and the model's own previous
@@ -51,7 +52,7 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
             # src never changes across decode steps — encode it once and
             # reuse across the loop instead of re-running the encoder at
             # every step (see WaveHeightBaselineNN.encode/decode).
-            memory = model.encode(src)
+            memory = model.encode(src, aux=aux)
             decoder_input = start_token.unsqueeze(1)  # (batch, 1, output_dim)
             all_preds = []
 

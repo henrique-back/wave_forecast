@@ -18,7 +18,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
     Parameters:
     - model      : PyTorch model with an infer() method
-    - dataloader : DataLoader yielding (X_batch, y_batch)
+    - dataloader : DataLoader yielding (X_batch, aux_batch, y_batch)
     - device     : 'cpu' or 'cuda'
     - freqs      : frequency tensor required for Hs computation and infer()
     - lead_time  : number of steps to forecast (passed to model.infer)
@@ -107,8 +107,9 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     rmse_fn = RMSELoss()
 
     with torch.no_grad():
-        for src, y_batch in tqdm(dataloader):
+        for src, aux, y_batch in tqdm(dataloader):
             src = src.to(device)
+            aux = aux.to(device)
             y_batch = y_batch.to(device)
 
             # Persistence forecast: last observed value broadcast over all steps
@@ -118,7 +119,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             persistence = start_token.unsqueeze(1).expand(-1, y_batch.shape[1], -1)
 
             # Autoregressive model inference — no ground truth in decoder
-            y_pred = model.infer(src, freqs, lead_time, freq_means=freq_means)
+            y_pred = model.infer(src, freqs, lead_time, freq_means=freq_means, aux=aux)
 
             all_preds.append(y_pred.cpu())
             all_targets.append(y_batch.cpu())

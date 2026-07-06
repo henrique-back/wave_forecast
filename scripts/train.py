@@ -28,6 +28,7 @@ import torch
 from utils import get_freqs, set_seed, get_device
 from nn import WaveHeightBaselineNN, evaluate
 from nn.optimization import _prepare_dataloaders, _train_model
+from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
 
 print("Current working directory:", os.getcwd())
 
@@ -42,6 +43,13 @@ EXPERIMENT_NAME = "weightedmeanSS_conv_freqemb_v3"
 target = "density"
 deltats = [1]
 lead_times_hours = [24]
+
+# Must match the CHANNEL_SET/AUX_SET that produced this experiment's
+# best_trial.txt — see nn/channels.py and scripts/optimize.py.
+CHANNEL_SET = "full"
+AUX_SET = "none"
+assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
+assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
@@ -102,7 +110,7 @@ def main():
         raise FileNotFoundError(
             f"{file_path} not found — run scripts/data_processing.py first."
         )
-    density, alpha_1, alpha_2, r_1 = pd.read_pickle(file_path)
+    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(file_path)
     print("Loaded preprocessed wave spectral data")
 
     freqs = get_freqs(density)
@@ -114,6 +122,7 @@ def main():
         alpha_1_d = alpha_1[::deltat]
         alpha_2_d = alpha_2[::deltat]
         r_1_d = r_1[::deltat]
+        wind_d = wind[::deltat]
 
         for lead_time_hours in lead_times_hours:
             if lead_time_hours % deltat != 0:
@@ -151,7 +160,7 @@ def main():
                 print(f"\n--- Seed {seed} ---")
                 set_seed(seed)
 
-                train_loader, val_loader, test_loader, freq_means, num_freqs = (
+                train_loader, val_loader, test_loader, freq_means, num_freqs, num_channels, num_aux_channels = (
                     _prepare_dataloaders(
                         density_d,
                         alpha_1_d,
@@ -162,6 +171,9 @@ def main():
                         params["batch_size"],
                         target,
                         shuffle_seed=seed,
+                        wind=wind_d,
+                        channel_set=CHANNEL_SET,
+                        aux_set=AUX_SET,
                     )
                 )
 
@@ -169,6 +181,8 @@ def main():
                     num_freqs=num_freqs,
                     freqs=freqs,
                     target=target,
+                    num_channels=num_channels,
+                    num_aux_channels=num_aux_channels,
                     dropout=params["dropout"],
                     nhead=params["nhead"],
                     num_encoder_layers=params["num_encoder_layers"],

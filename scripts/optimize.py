@@ -10,6 +10,7 @@ import optuna
 import optuna.visualization as vis
 from utils import get_freqs, set_seed, data_processing, save_progress
 from nn import objective
+from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
 from functools import partial
 
 print("Current working directory:", os.getcwd())
@@ -41,6 +42,21 @@ lead_times_hours = [48, 72]
 target = 'density'
 n_trials = 50
 
+# Which frequency-resolved channels feed the encoder. See nn/channels.py.
+#   'density' : spectral density only
+#   'full'    : density + alpha_1 + alpha_2 + r_1 (current default)
+CHANNEL_SET = 'full'
+assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
+
+# Which scalar side-input (aux) channels are fused into the encoder. See
+# nn/channels.py. 'wind' requires buoy_data/wind.txt to have been processed
+# (i.e. processed_data.pkl regenerated after utils/data_processing.py added
+# wind support).
+#   'none' : no auxiliary input (current default)
+#   'wind' : wind_u/wind_v
+AUX_SET = 'none'
+assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
+
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
 # and report the Optuna trial value.  Must be one of:
 #   'weighted_mean_SS'  exponentially-weighted mean per-step Skill Score (default)
@@ -60,11 +76,11 @@ file_path = folder_path / "processed_data.pkl"
 # Load from file if it exists
 if file_path.exists():
     dfs_interpolated = pd.read_pickle(file_path)
-    density, alpha_1, alpha_2, r_1 = dfs_interpolated
+    density, alpha_1, alpha_2, r_1, wind = dfs_interpolated
     print("Loaded preprocessed wave spectral data")
 else:
     from utils.data_processing import data_processing  # or wherever your function lives
-    density, alpha_1, alpha_2, r_1 = data_processing(folder_path, save_path=file_path)
+    density, alpha_1, alpha_2, r_1, wind = data_processing(folder_path, save_path=file_path)
 
 freqs = get_freqs(density)
 
@@ -79,6 +95,8 @@ if not _meta_path.exists():
         f"- **Description**: {EXPERIMENT_DESCRIPTION}\n"
         f"- **STUDY_VERSION**: {STUDY_VERSION}\n"
         f"- **OBJECTIVE_METRIC**: {OBJECTIVE_METRIC}\n"
+        f"- **CHANNEL_SET**: {CHANNEL_SET}\n"
+        f"- **AUX_SET**: {AUX_SET}\n"
         f"- **Architecture**: (fill in manually)\n"
     )
 
@@ -89,6 +107,7 @@ for deltat in deltats:
     alpha_1_d = alpha_1[::deltat]
     alpha_2_d = alpha_2[::deltat]
     r_1_d = r_1[::deltat]
+    wind_d = wind[::deltat]
 
     # Convert hours to steps (skip hours not divisible by deltat)
     lead_times_steps = [lt // deltat for lt in lead_times_hours if lt % deltat == 0]
@@ -97,11 +116,12 @@ for deltat in deltats:
                                                 [lt for lt in lead_times_hours if lt % deltat == 0]):
         print(f"\n=== Optimizing for deltat={deltat}h, lead_time={lead_time_hours}h ({lead_time_steps} steps) ===")
 
-        # Create unique Optuna study name
+        # Create unique Optuna study name — channel_set/aux_set are included so
+        # a study never silently mixes trials across incompatible input configs.
         target_folder = f'{target}'
         deltat_folder = f'deltat_{deltat}'
         lead_hours = f'lead_{lead_time_hours}h'
-        study_name = f'{target_folder}_{deltat_folder}_{lead_hours}_{STUDY_VERSION}'
+        study_name = f'{target_folder}_{CHANNEL_SET}_{AUX_SET}_{deltat_folder}_{lead_hours}_{STUDY_VERSION}'
 
         # Folder for results — nested under the experiment name
         results_folder = (Path(__file__).parent.parent / 'results'
@@ -115,6 +135,9 @@ for deltat in deltats:
             alpha_1=alpha_1_d,
             alpha_2=alpha_2_d,
             r_1=r_1_d,
+            wind=wind_d,
+            channel_set=CHANNEL_SET,
+            aux_set=AUX_SET,
             freqs=freqs,
             lead_time=lead_time_steps,
             target=target,
