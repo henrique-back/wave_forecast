@@ -253,7 +253,14 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
 
     # Sample hyperparameters
     seq_len = trial.suggest_categorical('seq_len', [12, 24, 48, 96])
-    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
+    # The scheduled-sampling training loop (train_one_epoch) unrolls one
+    # forward pass per decoder step and only backpropagates once at the end,
+    # so its memory footprint grows ~quadratically with lead_time. Cap
+    # batch_size for longer horizons to avoid CUDA OOM (see lead_48h Trial 1,
+    # 2026-07-03: batch_size=128 + embed_dim=256 OOM'd on a 32GiB GPU as soon
+    # as tf_ratio<1.0 activated the scheduled-sampling branch).
+    batch_size_choices = [32, 64] if lead_time > 24 else [32, 64, 128]
+    batch_size = trial.suggest_categorical('batch_size', batch_size_choices)
     lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
     dropout = trial.suggest_float('dropout', 0.1, 0.3)
     # embed_dim derived as head_dim × nhead so it is always divisible by nhead.
@@ -293,10 +300,19 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     )
     model = model.to(device)
 
-    best_val_score, best_val_metrics, best_model_state = _train_model(
-        model, train_loader, val_loader, device, freqs, freq_means,
-        target, lead_time, lr, weight_decay, objective_metric,
-        num_epochs=100, patience=10, trial=trial)
+    try:
+        best_val_score, best_val_metrics, best_model_state = _train_model(
+            model, train_loader, val_loader, device, freqs, freq_means,
+            target, lead_time, lr, weight_decay, objective_metric,
+            num_epochs=100, patience=10, trial=trial)
+    except torch.OutOfMemoryError:
+        # Drop references to this trial's model/optimizer/activations before
+        # emptying the cache — otherwise the exception's traceback keeps the
+        # frame (and its tensors) alive and the freed memory never reaches
+        # the allocator, starving the next trial too.
+        del model
+        torch.cuda.empty_cache()
+        raise
 
     # Checkpoint the model whenever this trial beats every trial completed so
     # far, mirroring how save_progress overwrites current_best.txt. Trials run

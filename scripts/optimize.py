@@ -5,6 +5,7 @@ import subprocess
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pathlib import Path
 import pandas as pd
+import torch
 import optuna
 import optuna.visualization as vis
 from utils import get_freqs, set_seed, data_processing, save_progress
@@ -20,14 +21,14 @@ set_seed(42)
 # changes in a way that makes old trials incomparable.  A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model.
-STUDY_VERSION = 'v3'
+STUDY_VERSION = 'v4'
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = 'weightedmeanSS_conv_freqemb_v3'
+EXPERIMENT_NAME = 'weightedmeanSS_conv_freqemb_v4'
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -36,7 +37,7 @@ EXPERIMENT_DESCRIPTION = (
 )
 
 # Set parameters
-lead_times_hours = [6, 12, 24, 48]
+lead_times_hours = [48, 72]
 target = 'density'
 n_trials = 50
 
@@ -133,7 +134,11 @@ for deltat in deltats:
             pruner=pruner)
         
         study.optimize(objective_fn, n_trials=n_trials,
-                    callbacks=[lambda study, trial: save_progress(study, trial, results_folder)])
+                    callbacks=[lambda study, trial: save_progress(study, trial, results_folder)],
+                    # A single trial hitting CUDA OOM (e.g. a large batch_size /
+                    # lead_time / embed_dim combination) must not take down the
+                    # whole multi-hour study — mark it failed and keep going.
+                    catch=(torch.OutOfMemoryError,))
         print("Best trial:")
         print(study.best_trial.params)
         print("Validation loss:", study.best_value)
