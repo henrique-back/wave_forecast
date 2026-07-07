@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from utils import compute_hs
+from utils import compute_hs, compute_shape
 
 def prepare_y(density, seq_length=24, lead_time=1, target="hs"):
     """
@@ -10,12 +10,15 @@ def prepare_y(density, seq_length=24, lead_time=1, target="hs"):
     - density: pandas DataFrame (time x frequencies), column names must be float frequencies
     - seq_length: input window length
     - lead_time: steps ahead to predict
-    - target: 'hs' for significant wave height, 'density' for full spectrum
+    - target: 'hs' for significant wave height, 'density' for full spectrum,
+      'shape' for the unit-area normalized spectrum E(f)/m0 (paired with an
+      'hs'-target model to reconstruct the physical spectrum as shape * m0 —
+      see CLAUDE.md's shape/magnitude model split)
 
     Returns:
     - torch.FloatTensor:
         - shape (samples, lead_time, 1) if target == 'hs'
-        - shape (samples, lead_time, num_freqs) if target == 'density'
+        - shape (samples, lead_time, num_freqs) if target == 'density' or 'shape'
     """
     try:
         freqs = np.array([float(f) for f in density.columns])
@@ -41,5 +44,15 @@ def prepare_y(density, seq_length=24, lead_time=1, target="hs"):
             y[i, :, :] = density[i + seq_length : i + seq_length + lead_time, :]
         return torch.from_numpy(y)
 
+    elif target == "shape":
+        # Computed from the RAW (pre-normalisation) density, same convention
+        # as the 'hs' branch — freq-mean scale normalisation would otherwise
+        # distort the shape (it scales each bin by a different constant).
+        shape_arr = compute_shape(density, freqs)  # (time, num_freqs)
+        y = np.zeros((num_samples, lead_time, num_freqs), dtype=np.float32)
+        for i in range(num_samples):
+            y[i, :, :] = shape_arr[i + seq_length : i + seq_length + lead_time, :]
+        return torch.from_numpy(y)
+
     else:
-        raise ValueError("Invalid target type. Choose 'hs' or 'density'.")
+        raise ValueError("Invalid target type. Choose 'hs', 'density', or 'shape'.")

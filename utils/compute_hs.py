@@ -57,3 +57,33 @@ def compute_bulk_params(density_batch, freqs):
     hs   = 4.0 * np.sqrt(m0)
     tm02 = np.sqrt(m0.clip(min=0.0) / m2)
     return hs, tm02
+
+
+def compute_shape(density_batch, freqs, m0_threshold=1e-12):
+    """
+    Normalize a batch of spectra to unit-area shape: shape(f) = E(f) / m0.
+
+    This decouples spectral shape from energy magnitude — the quantity a
+    'shape'-target model is trained to predict, paired separately with an
+    'hs'-target model that forecasts magnitude (see CLAUDE.md's discussion
+    of the shape/magnitude model split).
+
+    Parameters
+    ----------
+    density_batch : np.ndarray
+        Spectral density, shape (n_samples, num_freqs) or
+        (batch, lead_time, num_freqs) — same convention as
+        compute_hs_from_density / compute_bulk_params.
+    freqs : np.ndarray
+        Frequency array, shape (num_freqs,).
+    m0_threshold : float
+        m0 is clipped to this minimum before dividing, so near-zero-energy
+        spectra (calm seas, missing records) don't produce inf/nan.
+
+    Returns
+    -------
+    shape : np.ndarray, same shape as density_batch — integrates to 1 over freqs.
+    """
+    freq_axis = density_batch.ndim - 1
+    m0 = np.trapezoid(density_batch, freqs, axis=freq_axis).clip(min=m0_threshold)
+    return density_batch / np.expand_dims(m0, axis=freq_axis)

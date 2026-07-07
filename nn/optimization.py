@@ -137,10 +137,14 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                         f" | Val Shape_RMSE: {val_metrics['Shape_RMSE']:.4f}"
                         f" (masked: {val_metrics['Shape_masked_samples']})"
                         f" | Val SI_mean: {val_metrics['SI_mean']:.4f}")
+        # Hs_MAPE is only populated for 'hs'/'density' targets (see evaluate.py);
+        # 'shape' has no magnitude to compute a MAPE against.
+        hs_mape_str = (f"{val_metrics['Hs_MAPE']:.2f}%"
+                       if val_metrics['Hs_MAPE'] is not None else "N/A")
         print(f"Epoch {epoch+1}/{num_epochs} - "
               f"Train RMSE: {train_metrics['RMSE']:.4f} | "
               f"Val RMSE: {val_metrics['RMSE']:.4f} | "
-              f"Val Hs_MAPE: {val_metrics['Hs_MAPE']:.2f}% | "
+              f"Val Hs_MAPE: {hs_mape_str} | "
               f"Val CC: {val_metrics['CC']:.4f} | "
               f"Val {objective_metric}: {val_score:.4f} | "
               f"tf_ratio: {tf_ratio:.2f}"
@@ -208,14 +212,21 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
         train_density.mean().clip(lower=1e-8).values, dtype=torch.float32
     )  # shape: (num_freqs,)
 
-    # For the Hs target, build sequence targets from PHYSICAL (pre-normalisation)
-    # density so that y_batch and the persistence start token are both in metres.
+    # For the Hs and shape targets, build sequence targets from PHYSICAL
+    # (pre-normalisation) density so that y_batch and the persistence start
+    # token are both physically meaningful (metres for hs; a true unit-area
+    # shape for 'shape' — freq-mean scale normalisation would otherwise
+    # distort the shape, since it scales each bin by a different constant).
     # For the density target, targets are the normalised spectra (model operates
     # in normalised space; freq_means is applied externally at loss/metric time).
     if target == 'hs':
         train_y = prepare_y(train_density, seq_len, lead_time, target='hs')
         val_y   = prepare_y(val_density,   seq_len, lead_time, target='hs')
         test_y  = prepare_y(test_density,  seq_len, lead_time, target='hs')
+    elif target == 'shape':
+        train_y = prepare_y(train_density, seq_len, lead_time, target='shape')
+        val_y   = prepare_y(val_density,   seq_len, lead_time, target='shape')
+        test_y  = prepare_y(test_density,  seq_len, lead_time, target='shape')
 
     # Normalize inputs — fit on training data, apply to all splits.
     # Density uses scale-only normalization (divide by per-frequency training mean)

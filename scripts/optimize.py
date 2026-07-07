@@ -22,24 +22,25 @@ set_seed(42)
 # changes in a way that makes old trials incomparable.  A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model.
-STUDY_VERSION = 'v4'
+STUDY_VERSION = 'v5'
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = 'weightedmeanSS_conv_freqemb_v4'
+EXPERIMENT_NAME = 'hs_shape_v5'
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
-    "Transformer with convolutional frontend and frequency-structured embedding. "
+    "Transformer with convolutional frontend and frequency-structured embedding."
     "Uses weighted mean Skill Score as objective."
+    "Trains to predict Hs and spectral shape (density target) at 6h, 12h, 24h, 48h lead times."
 )
 
 # Set parameters
-lead_times_hours = [48, 72]
-target = 'density'
+lead_times_hours = [6, 12, 24, 48]
+target = 'shape'
 n_trials = 50
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
@@ -100,46 +101,33 @@ if not _meta_path.exists():
         f"- **Architecture**: (fill in manually)\n"
     )
 
-deltats = [1]
-for deltat in deltats:
-    # Downsample
-    density_d = density[::deltat]
-    alpha_1_d = alpha_1[::deltat]
-    alpha_2_d = alpha_2[::deltat]
-    r_1_d = r_1[::deltat]
-    wind_d = wind[::deltat]
 
-    # Convert hours to steps (skip hours not divisible by deltat)
-    lead_times_steps = [lt // deltat for lt in lead_times_hours if lt % deltat == 0]
-
-    for lead_time_steps, lead_time_hours in zip(lead_times_steps, 
-                                                [lt for lt in lead_times_hours if lt % deltat == 0]):
-        print(f"\n=== Optimizing for deltat={deltat}h, lead_time={lead_time_hours}h ({lead_time_steps} steps) ===")
+    for lead_time_hours in lead_times_hours:
+        print(f"\n=== Optimizing for lead_time={lead_time_hours}h ===")
 
         # Create unique Optuna study name — channel_set/aux_set are included so
         # a study never silently mixes trials across incompatible input configs.
         target_folder = f'{target}'
-        deltat_folder = f'deltat_{deltat}'
         lead_hours = f'lead_{lead_time_hours}h'
-        study_name = f'{target_folder}_{CHANNEL_SET}_{AUX_SET}_{deltat_folder}_{lead_hours}_{STUDY_VERSION}'
+        study_name = f'{target_folder}_{CHANNEL_SET}_{AUX_SET}_{lead_hours}_{STUDY_VERSION}'
 
         # Folder for results — nested under the experiment name
         results_folder = (Path(__file__).parent.parent / 'results'
-                          / EXPERIMENT_NAME / target_folder / deltat_folder / lead_hours)
+                          / EXPERIMENT_NAME / target_folder / lead_hours)
         results_folder.mkdir(parents=True, exist_ok=True)
 
         # Define objective function
         objective_fn = partial(
             objective,
-            density=density_d,
-            alpha_1=alpha_1_d,
-            alpha_2=alpha_2_d,
-            r_1=r_1_d,
-            wind=wind_d,
+            density=density,
+            alpha_1=alpha_1,
+            alpha_2=alpha_2,
+            r_1=r_1,
+            wind=wind,
             channel_set=CHANNEL_SET,
             aux_set=AUX_SET,
             freqs=freqs,
-            lead_time=lead_time_steps,
+            lead_time=lead_time_hours,
             target=target,
             objective_metric=OBJECTIVE_METRIC,
             results_folder=results_folder)
@@ -168,8 +156,6 @@ for deltat in deltats:
 
         result_file = os.path.join(results_folder, 'best_trial.txt')
         with open(result_file, 'w') as f:
-            f.write(f"Delta t: {deltat}\n")
-            f.write(f"Lead time (steps): {lead_time_steps}\n")
             f.write(f"Lead time (hours): {lead_time_hours}\n")
             f.write("Best trial parameters:\n")
             f.write(str(study.best_trial.params) + '\n')

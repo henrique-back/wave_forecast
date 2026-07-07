@@ -113,8 +113,12 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             y_batch = y_batch.to(device)
 
             # Persistence forecast: last observed value broadcast over all steps
-            # get_start_token returns shape (batch, 1) for hs or (batch, num_freqs) for density
-            start_token = get_start_token(src, model.target, freqs, device)
+            # get_start_token returns shape (batch, 1) for hs or (batch, num_freqs) for
+            # density/shape. freq_means must be forwarded here (not just to model.infer()
+            # below) so the hs/shape persistence baseline is denormalised the same way the
+            # model's own predictions are — otherwise the SS denominator is wrong.
+            start_token = get_start_token(src, model.target, freqs, device,
+                                          freq_means=freq_means)
             # shape → (batch, 1, output_dim) → (batch, lead_time, output_dim)
             persistence = start_token.unsqueeze(1).expand(-1, y_batch.shape[1], -1)
 
