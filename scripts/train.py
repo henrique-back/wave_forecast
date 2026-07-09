@@ -2,7 +2,7 @@
 Retrain a final model using the best hyperparameters found by scripts/optimize.py,
 then evaluate it on the held-out test set (never touched during the Optuna search).
 
-Reads results/{EXPERIMENT_NAME}/{target}/deltat_{N}/lead_{N}h/best_trial.txt for
+Reads results/{EXPERIMENT_NAME}/{target}/lead_{N}h/best_trial.txt for
 each configured lead time, retrains from scratch with those hyperparameters
 (train split only, early-stopped on val — same regime objective() used), and
 writes a checkpoint + full metrics (val and test) back into that same folder.
@@ -37,12 +37,11 @@ print("Current working directory:", os.getcwd())
 # ---------------------------------------------------------------------------
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
-# best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/deltat_{N}/lead_{N}h/.
-EXPERIMENT_NAME = "weightedmeanSS_conv_freqemb_v3"
+# best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
+EXPERIMENT_NAME = "hs_shape_v5"
 
-target = "density"
-deltats = [1]
-lead_times_hours = [24]
+target = "shape"
+lead_times_hours = [6]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
@@ -69,13 +68,11 @@ PATIENCE = 10
 
 def parse_best_trial(path: Path) -> dict:
     text = path.read_text()
-    deltat = int(re.search(r"Delta t: (\d+)", text).group(1))
     lead_steps = int(re.search(r"Lead time \(steps\): (\d+)", text).group(1))
     lead_hours = int(re.search(r"Lead time \(hours\): (\d+)", text).group(1))
     params_line = re.search(r"Best trial parameters:\n(.+)\n", text).group(1)
     params = ast.literal_eval(params_line)
     return {
-        "deltat": deltat,
         "lead_time_steps": lead_steps,
         "lead_time_hours": lead_hours,
         "params": params,
@@ -117,157 +114,145 @@ def main():
     device = get_device()
     print(f"Running on device: {device}")
 
-    for deltat in deltats:
-        density_d = density[::deltat]
-        alpha_1_d = alpha_1[::deltat]
-        alpha_2_d = alpha_2[::deltat]
-        r_1_d = r_1[::deltat]
-        wind_d = wind[::deltat]
+    for lead_time_hours in lead_times_hours:
+        results_folder = (
+            project_root
+            / "results"
+            / EXPERIMENT_NAME
+            / target
+            / f"lead_{lead_time_hours}h"
+        )
+        best_trial_path = results_folder / "best_trial.txt"
+        if not best_trial_path.exists():
+            print(f"no best_trial.txt at {best_trial_path}")
+            continue
 
-        for lead_time_hours in lead_times_hours:
-            if lead_time_hours % deltat != 0:
-                continue
+        trial_info = parse_best_trial(best_trial_path)
+        params = trial_info["params"]
+        lead_time_steps = trial_info["lead_time_steps"]
+        embed_dim = params["head_dim"] * params["nhead"]
+        print(f"({lead_time_steps} steps) — params: {params} ===")
 
-            results_folder = (
-                project_root
-                / "results"
-                / EXPERIMENT_NAME
-                / target
-                / f"deltat_{deltat}"
-                / f"lead_{lead_time_hours}h"
+        val_metrics_per_seed = []
+        test_metrics_per_seed = []
+
+        for seed in SEEDS:
+            print(f"\n--- Seed {seed} ---")
+            set_seed(seed)
+
+            (
+                train_loader,
+                val_loader,
+                test_loader,
+                freq_means,
+                num_freqs,
+                num_channels,
+                num_aux_channels,
+            ) = _prepare_dataloaders(
+                density,
+                alpha_1,
+                alpha_2,
+                r_1,
+                params["seq_len"],
+                lead_time_steps,
+                params["batch_size"],
+                target,
+                shuffle_seed=seed,
+                wind=wind,
+                channel_set=CHANNEL_SET,
+                aux_set=AUX_SET,
             )
-            best_trial_path = results_folder / "best_trial.txt"
-            if not best_trial_path.exists():
-                print(
-                    f"Skipping deltat={deltat}, lead={lead_time_hours}h — "
-                    f"no best_trial.txt at {best_trial_path}"
-                )
-                continue
 
-            trial_info = parse_best_trial(best_trial_path)
-            params = trial_info["params"]
-            lead_time_steps = trial_info["lead_time_steps"]
-            embed_dim = params["head_dim"] * params["nhead"]
+            model = WaveHeightBaselineNN(
+                num_freqs=num_freqs,
+                freqs=freqs,
+                target=target,
+                num_channels=num_channels,
+                num_aux_channels=num_aux_channels,
+                dropout=params["dropout"],
+                nhead=params["nhead"],
+                num_encoder_layers=params["num_encoder_layers"],
+                num_decoder_layers=params["num_decoder_layers"],
+                embed_dim=embed_dim,
+            ).to(device)
+
+            best_val_score, best_val_metrics, best_model_state = _train_model(
+                model,
+                train_loader,
+                val_loader,
+                device,
+                freqs,
+                freq_means,
+                target,
+                lead_time_steps,
+                params["lr"],
+                params["weight_decay"],
+                OBJECTIVE_METRIC,
+                num_epochs=NUM_EPOCHS,
+                patience=PATIENCE,
+                trial=None,
+            )
+
+            if best_model_state is not None:
+                model.load_state_dict(best_model_state)
+
+            test_metrics = evaluate(
+                model,
+                test_loader,
+                device,
+                freqs,
+                lead_time=lead_time_steps,
+                freq_means=freq_means,
+            )
             print(
-                f"\n=== Retraining deltat={deltat}, lead={lead_time_hours}h "
-                f"({lead_time_steps} steps) — params: {params} ==="
+                f"Seed {seed} — best val {OBJECTIVE_METRIC}: {best_val_score:.4f} | "
+                f"test RMSE: {test_metrics['RMSE']:.4f} | "
+                f"test overall_SS: {test_metrics['overall_SS']:.4f}"
             )
 
-            val_metrics_per_seed = []
-            test_metrics_per_seed = []
+            val_metrics_per_seed.append(best_val_metrics)
+            test_metrics_per_seed.append(test_metrics)
 
-            for seed in SEEDS:
-                print(f"\n--- Seed {seed} ---")
-                set_seed(seed)
-
-                train_loader, val_loader, test_loader, freq_means, num_freqs, num_channels, num_aux_channels = (
-                    _prepare_dataloaders(
-                        density_d,
-                        alpha_1_d,
-                        alpha_2_d,
-                        r_1_d,
-                        params["seq_len"],
-                        lead_time_steps,
-                        params["batch_size"],
-                        target,
-                        shuffle_seed=seed,
-                        wind=wind_d,
-                        channel_set=CHANNEL_SET,
-                        aux_set=AUX_SET,
-                    )
-                )
-
-                model = WaveHeightBaselineNN(
-                    num_freqs=num_freqs,
-                    freqs=freqs,
-                    target=target,
-                    num_channels=num_channels,
-                    num_aux_channels=num_aux_channels,
-                    dropout=params["dropout"],
-                    nhead=params["nhead"],
-                    num_encoder_layers=params["num_encoder_layers"],
-                    num_decoder_layers=params["num_decoder_layers"],
-                    embed_dim=embed_dim,
-                ).to(device)
-
-                best_val_score, best_val_metrics, best_model_state = _train_model(
-                    model,
-                    train_loader,
-                    val_loader,
-                    device,
-                    freqs,
-                    freq_means,
-                    target,
-                    lead_time_steps,
-                    params["lr"],
-                    params["weight_decay"],
-                    OBJECTIVE_METRIC,
-                    num_epochs=NUM_EPOCHS,
-                    patience=PATIENCE,
-                    trial=None,
-                )
-
-                if best_model_state is not None:
-                    model.load_state_dict(best_model_state)
-
-                test_metrics = evaluate(
-                    model,
-                    test_loader,
-                    device,
-                    freqs,
-                    lead_time=lead_time_steps,
-                    freq_means=freq_means,
-                )
-                print(
-                    f"Seed {seed} — best val {OBJECTIVE_METRIC}: {best_val_score:.4f} | "
-                    f"test RMSE: {test_metrics['RMSE']:.4f} | "
-                    f"test overall_SS: {test_metrics['overall_SS']:.4f}"
-                )
-
-                val_metrics_per_seed.append(best_val_metrics)
-                test_metrics_per_seed.append(test_metrics)
-
-                checkpoint_path = results_folder / f"final_model_seed{seed}.pt"
-                torch.save(
-                    {
-                        "model_state_dict": model.state_dict(),
-                        "params": params,
-                        "target": target,
-                        "deltat": deltat,
-                        "lead_time_steps": lead_time_steps,
-                        "lead_time_hours": lead_time_hours,
-                        "seed": seed,
-                        "freq_means": freq_means,
-                        "freqs": freqs,
-                    },
-                    checkpoint_path,
-                )
-
-                metrics_path = results_folder / f"final_metrics_seed{seed}.json"
-                metrics_path.write_text(
-                    json.dumps(
-                        {
-                            "seed": seed,
-                            "params": params,
-                            "val_metrics": best_val_metrics,
-                            "test_metrics": test_metrics,
-                        },
-                        indent=2,
-                    )
-                )
-                print(f"Saved checkpoint → {checkpoint_path}")
-                print(f"Saved metrics → {metrics_path}")
-
-            if len(SEEDS) > 1:
-                summary = {
-                    "seeds": SEEDS,
+            checkpoint_path = results_folder / f"final_model_seed{seed}.pt"
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
                     "params": params,
-                    "val_metrics": _aggregate_metrics(val_metrics_per_seed),
-                    "test_metrics": _aggregate_metrics(test_metrics_per_seed),
-                }
-                summary_path = results_folder / "final_metrics_summary.json"
-                summary_path.write_text(json.dumps(summary, indent=2))
-                print(f"Saved {len(SEEDS)}-seed summary → {summary_path}")
+                    "target": target,
+                    "lead_time_steps": lead_time_steps,
+                    "lead_time_hours": lead_time_hours,
+                    "seed": seed,
+                    "freq_means": freq_means,
+                    "freqs": freqs,
+                },
+                checkpoint_path,
+            )
+
+            metrics_path = results_folder / f"final_metrics_seed{seed}.json"
+            metrics_path.write_text(
+                json.dumps(
+                    {
+                        "seed": seed,
+                        "params": params,
+                        "val_metrics": best_val_metrics,
+                        "test_metrics": test_metrics,
+                    },
+                    indent=2,
+                )
+            )
+            print(f"Saved checkpoint → {checkpoint_path}")
+            print(f"Saved metrics → {metrics_path}")
+
+        if len(SEEDS) > 1:
+            summary = {
+                "seeds": SEEDS,
+                "params": params,
+                "val_metrics": _aggregate_metrics(val_metrics_per_seed),
+                "test_metrics": _aggregate_metrics(test_metrics_per_seed),
+            }
+            summary_path = results_folder / "final_metrics_summary.json"
+            summary_path.write_text(json.dumps(summary, indent=2))
+            print(f"Saved {len(SEEDS)}-seed summary → {summary_path}")
 
 
 if __name__ == "__main__":
