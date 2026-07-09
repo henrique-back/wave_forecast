@@ -41,7 +41,7 @@ EXPERIMENT_DESCRIPTION = (
 
 # Set parameters
 lead_times_hours = [6, 12, 24, 48]
-target = "shape"
+target = "hs"
 n_trials = 50
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
