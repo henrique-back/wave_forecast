@@ -40,7 +40,7 @@ print("Current working directory:", os.getcwd())
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
 EXPERIMENT_NAME = "hs_shape_v5"
 
-target = "shape"
+target = "hs"
 lead_times_hours = [6]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
@@ -68,12 +68,13 @@ PATIENCE = 10
 
 def parse_best_trial(path: Path) -> dict:
     text = path.read_text()
-    lead_steps = int(re.search(r"Lead time \(steps\): (\d+)", text).group(1))
     lead_hours = int(re.search(r"Lead time \(hours\): (\d+)", text).group(1))
     params_line = re.search(r"Best trial parameters:\n(.+)\n", text).group(1)
     params = ast.literal_eval(params_line)
     return {
-        "lead_time_steps": lead_steps,
+        # optimize.py passes lead_time straight through as the step count
+        # (no deltat downsampling wired into this script), so steps == hours.
+        "lead_time_steps": lead_hours,
         "lead_time_hours": lead_hours,
         "params": params,
     }
