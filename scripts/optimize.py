@@ -23,25 +23,26 @@ set_seed(42)
 # changes in a way that makes old trials incomparable.  A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model.
-STUDY_VERSION = "v5"
+STUDY_VERSION = "v6"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "hs_shape_v5"
+EXPERIMENT_NAME = "hs_shape_v6"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
     "Transformer with convolutional frontend and frequency-structured embedding."
     "Uses weighted mean Skill Score as objective."
     "Trains to predict Hs and spectral shape (density target) at 6h, 12h, 24h, 48h lead times."
+    "Increases patience to 20 epochs, and n_warmup_steps to 40, so early stopping is more robust to noise and the model has more time to benefit from LR reductions."
 )
 
 # Set parameters
-lead_times_hours = [6, 12, 24, 48]
-target = "hs"
+lead_times_hours = [6, 12, 24]
+target = "shape"
 n_trials = 50
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
@@ -146,8 +147,8 @@ for lead_time_hours in lead_times_hours:
     sampler = optuna.samplers.TPESampler(
         n_startup_trials=20, multivariate=True, seed=42
     )
-    # num_epochs=100, early stopping patience=10 → ~20% warmup = 20 steps
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=20)
+    # num_epochs=100, early stopping patience=20 → ~20% warmup = 40 steps
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=40, n_min_trials=5, interval_steps=1)
     study = optuna.create_study(
         study_name=study_name,
         storage=f"sqlite:///optuna_study_{STUDY_VERSION}.db",

@@ -88,7 +88,7 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
 
 def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                   target, lead_time, lr, weight_decay, objective_metric,
-                  num_epochs=100, patience=10, trial=None):
+                  num_epochs=100, patience=20, trial=None):
     """Run the scheduled-sampling training loop with early stopping.
 
     Shared by objective() (Optuna trial) and scripts/train.py (fixed-config
@@ -100,16 +100,16 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     """
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     # patience=3 so the LR is halved 7 epochs before early stopping fires (at
-    # patience=10), giving the model meaningful time to benefit from the new LR.
+    # patience=20), giving the model meaningful time to benefit from the new LR.
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', patience=3, factor=0.5
+        optimizer, mode='max', patience=5, factor=0.5, cooldown=2
     )
 
-    # tf_ratio decays from 1.0 to 0.0 over 4×patience epochs.  With early
-    # stopping at patience=10, a run going to epoch ~20 will have tf_ratio
+    # tf_ratio decays from 1.0 to 0.0 over 2×patience epochs.  With early
+    # stopping at patience=20, a run going to epoch ~40 will have tf_ratio
     # ≈ 0.5 — half its training steps use the model's own predictions, which
     # meaningfully closes the teacher-forcing / autoregressive distribution gap.
-    tf_decay_epochs = 4 * patience
+    tf_decay_epochs = 2 * patience
 
     best_val_score = float('-inf')
     best_val_metrics = None
@@ -364,7 +364,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
         best_val_score, best_val_metrics, best_model_state = _train_model(
             model, train_loader, val_loader, device, freqs, freq_means,
             target, lead_time, lr, weight_decay, objective_metric,
-            num_epochs=100, patience=10, trial=trial)
+            num_epochs=100, patience=20, trial=trial)
     except torch.OutOfMemoryError:
         # Drop references to this trial's model/optimizer/activations before
         # emptying the cache — otherwise the exception's traceback keeps the
