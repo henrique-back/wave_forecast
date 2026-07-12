@@ -38,10 +38,10 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
-EXPERIMENT_NAME = "hs_shape_v5"
+EXPERIMENT_NAME = "hs_shape_v6"
 
 target = "hs"
-lead_times_hours = [6]
+lead_times_hours = [6, 12, 24]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
@@ -63,7 +63,7 @@ OBJECTIVE_METRIC = "weighted_mean_SS"
 SEEDS = [42]
 
 NUM_EPOCHS = 100
-PATIENCE = 10
+PATIENCE = 20
 
 
 def parse_best_trial(path: Path) -> dict:

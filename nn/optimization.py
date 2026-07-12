@@ -88,7 +88,7 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
 
 def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                   target, lead_time, lr, weight_decay, objective_metric,
-                  num_epochs=100, patience=20, trial=None):
+                  num_epochs=100, patience=10, trial=None):
     """Run the scheduled-sampling training loop with early stopping.
 
     Shared by objective() (Optuna trial) and scripts/train.py (fixed-config
@@ -100,7 +100,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     """
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     # patience=3 so the LR is halved 7 epochs before early stopping fires (at
-    # patience=20), giving the model meaningful time to benefit from the new LR.
+    # patience=10), giving the model meaningful time to benefit from the new LR.
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='max', patience=5, factor=0.5, cooldown=2
     )
@@ -109,7 +109,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     # stopping at patience=20, a run going to epoch ~40 will have tf_ratio
     # ≈ 0.5 — half its training steps use the model's own predictions, which
     # meaningfully closes the teacher-forcing / autoregressive distribution gap.
-    tf_decay_epochs = 2 * patience
+    tf_decay_epochs = 4 * patience
 
     best_val_score = float('-inf')
     best_val_metrics = None

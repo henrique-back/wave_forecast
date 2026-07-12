@@ -23,14 +23,14 @@ set_seed(42)
 # changes in a way that makes old trials incomparable.  A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model.
-STUDY_VERSION = "v6"
+STUDY_VERSION = "v7"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "hs_shape_v6"
+EXPERIMENT_NAME = "wind_combined_v7"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -42,7 +42,7 @@ EXPERIMENT_DESCRIPTION = (
 
 # Set parameters
 lead_times_hours = [6, 12, 24]
-target = "shape"
+target = "hs"
 n_trials = 50
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
@@ -57,7 +57,7 @@ assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_S
 # wind support).
 #   'none' : no auxiliary input (current default)
 #   'wind' : wind_u/wind_v
-AUX_SET = "none"
+AUX_SET = "wind"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
@@ -72,8 +72,9 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 OBJECTIVE_METRIC = "weighted_mean_SS"
 
 # Process data
+buoy_number = "42056"
 project_root = Path(__file__).resolve().parent.parent
-folder_path = project_root / "buoy_data"
+folder_path = project_root / "buoy_data" / buoy_number
 file_path = folder_path / "processed_data.pkl"
 
 # Load from file if it exists
@@ -147,8 +148,8 @@ for lead_time_hours in lead_times_hours:
     sampler = optuna.samplers.TPESampler(
         n_startup_trials=20, multivariate=True, seed=42
     )
-    # num_epochs=100, early stopping patience=20 → ~20% warmup = 40 steps
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=40, n_min_trials=5, interval_steps=1)
+    # num_epochs=100, early stopping patience=10 → ~20% warmup = 40 steps
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=20, n_min_trials=5, interval_steps=1)
     study = optuna.create_study(
         study_name=study_name,
         storage=f"sqlite:///optuna_study_{STUDY_VERSION}.db",
