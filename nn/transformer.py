@@ -47,6 +47,8 @@ class WaveHeightBaselineNN(nn.Module):
             num_channels=num_channels,
             freq_embed_dim=_FREQ_EMBED_DIM,
             embed_dim=embed_dim,
+            freqs=freqs,
+            dropout=dropout,
         )
 
         # Decoder input is either scalar Hs (1-dim, flat Linear — no frequency
@@ -64,6 +66,8 @@ class WaveHeightBaselineNN(nn.Module):
                 num_channels=1,
                 freq_embed_dim=_FREQ_EMBED_DIM,
                 embed_dim=embed_dim,
+                freqs=freqs,
+                dropout=dropout,
             )
         )
 
