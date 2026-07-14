@@ -49,10 +49,22 @@ class WaveHeightBaselineNN(nn.Module):
             embed_dim=embed_dim,
         )
 
-        # Decoder input is either scalar Hs (1-dim) or flat normalised density
-        # (num_freqs-dim, single channel) — no multi-channel structure here.
-        self.decoder_embedding = Embedding(
-            1 if self.target == 'hs' else num_freqs, embed_dim
+        # Decoder input is either scalar Hs (1-dim, flat Linear — no frequency
+        # axis to structure) or a single-channel spectrum (num_freqs-dim, for
+        # 'density'/'shape' targets). The latter gets the same per-bin
+        # structural prior as the encoder (FreqDimEmbedding with
+        # num_channels=1) instead of a flat Linear(num_freqs, embed_dim), so
+        # the decoder side is treated consistently with the encoder side —
+        # see decode() below for the (batch, seq, num_freqs) →
+        # (batch, seq, num_freqs, 1) reshape this requires.
+        self.decoder_embedding = (
+            Embedding(1, embed_dim) if self.target == 'hs'
+            else FreqDimEmbedding(
+                num_freqs=num_freqs,
+                num_channels=1,
+                freq_embed_dim=_FREQ_EMBED_DIM,
+                embed_dim=embed_dim,
+            )
         )
 
         # ── Auxiliary side-input (e.g. wind) ─────────────────────────────────
@@ -78,12 +90,17 @@ class WaveHeightBaselineNN(nn.Module):
         self.temporal_conv = TemporalConvFrontend(embed_dim, dropout=dropout)
 
         # ── Transformer ──────────────────────────────────────────────────────
+        # norm_first=True (pre-norm) matches temporal_conv's pre-norm residual
+        # convention above and is generally more stable to train at the deeper
+        # end of the search space (up to 4 encoder/decoder layers) than
+        # nn.Transformer's post-norm default.
         self.transformer = nn.Transformer(
             nhead=nhead,
             num_encoder_layers=num_encoder_layers,
             num_decoder_layers=num_decoder_layers,
             d_model=embed_dim,
             batch_first=batch_first,
+            norm_first=True,
         )
 
         # Output layer — predict either 1 value (hs) or num_freqs (density)
@@ -108,6 +125,11 @@ class WaveHeightBaselineNN(nn.Module):
     def decode(self, tgt, memory):
         # tgt: (batch_size, tgt_seq_len, 1 or num_freqs)
         # memory: encoder output from encode(), (batch, src_seq_len, embed_dim)
+        if self.target != 'hs':
+            # FreqDimEmbedding expects an explicit (num_freqs, num_channels)
+            # layout; the decoder's single-channel spectrum arrives flat, so
+            # add back the size-1 channel axis.
+            tgt = tgt.unsqueeze(-1)   # (batch, tgt_seq_len, num_freqs, 1)
         tgt = self.decoder_embedding(tgt)   # (batch, tgt_seq_len, embed_dim)
         tgt = self.pos_encoder(tgt)
 
