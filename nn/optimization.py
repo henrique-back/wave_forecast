@@ -58,6 +58,10 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         'weighted_mean_SS' : exponentially-weighted mean per-step Skill Score
                              (recommended default — robust to variable seq_len)
         'overall_SS'       : Skill Score on flattened all-step RMSE
+        'Hs_SS'            : Hs Skill Score — robust to seq_len variation and
+                             directly targets Hs. For target=='hs' equals
+                             overall_SS; for target=='density' computed from
+                             denormalised spectra (see evaluate.py).
         'RMSE'             : negative overall RMSE
         'Hs_RMSE'          : negative Hs RMSE (density target only)
         'Tm02_RMSE'        : negative Tm02 RMSE (density target only)
@@ -68,6 +72,8 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         return _weighted_mean_ss(metrics['per_step_SS'])
     elif objective_metric == 'overall_SS':
         return metrics['overall_SS']
+    elif objective_metric == 'Hs_SS':
+        return metrics['Hs_SS']
     elif objective_metric == 'RMSE':
         return -metrics['RMSE']
     elif objective_metric == 'Hs_RMSE':
@@ -81,7 +87,7 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
     else:
         raise ValueError(
             f"Unknown objective_metric {objective_metric!r}. Valid: "
-            "'weighted_mean_SS', 'overall_SS', 'RMSE', 'Hs_RMSE', "
+            "'weighted_mean_SS', 'overall_SS', 'Hs_SS', 'RMSE', 'Hs_RMSE', "
             "'Tm02_RMSE', 'Shape_RMSE', 'SI_mean'"
         )
 

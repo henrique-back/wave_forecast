@@ -39,6 +39,7 @@ print("Current working directory:", os.getcwd())
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
 EXPERIMENT_NAME = "hs_shape_v6"
+BUOY_ID = '32012'
 
 target = "hs"
 lead_times_hours = [6, 12, 24]
@@ -103,7 +104,7 @@ def _aggregate_metrics(metrics_list: list[dict]) -> dict:
 
 def main():
     project_root = Path(__file__).resolve().parent.parent
-    file_path = project_root / "buoy_data" / "processed_data.pkl"
+    file_path = project_root / "buoy_data" / BUOY_ID / "processed_data.pkl"
     if not file_path.exists():
         raise FileNotFoundError(
             f"{file_path} not found — run scripts/data_processing.py first."

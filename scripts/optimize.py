@@ -36,9 +36,8 @@ EXPERIMENT_NAME = "wind_combined_v7"
 EXPERIMENT_DESCRIPTION = (
     "Transformer with convolutional frontend and frequency-structured embedding."
     "Uses weighted mean Skill Score as objective."
-    "Trains to predict Hs and spectral shape (density target) at 6h, 12h, 24h, 48h lead times."
-    "Increases patience to 20 epochs, and n_warmup_steps to 40, so early stopping is more robust to noise and the model has more time to benefit from LR reductions."
-)
+    "Trains to predict Hs and spectral shape (density target) at 6h, 12h, 24h lead times."
+    "Uses wind_u/wind_v as auxiliary inputs.")
 
 # Set parameters
 lead_times_hours = [6, 12, 24]
@@ -62,14 +61,17 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
 # and report the Optuna trial value.  Must be one of:
-#   'weighted_mean_SS'  exponentially-weighted mean per-step Skill Score (default)
+#   'weighted_mean_SS'  exponentially-weighted mean per-step Skill Score
 #   'overall_SS'        Skill Score on flattened all-step RMSE
+#   'Hs_SS'             Hs Skill Score — robust to seq_len; use when Hs accuracy
+#                       is the primary goal. For target=='hs' equals overall_SS;
+#                       for target=='density' computed from denormalised spectra.
 #   'RMSE'              negative overall RMSE
 #   'Hs_RMSE'           negative Hs RMSE           (density target only)
 #   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
 #   'Shape_RMSE'        negative spectral shape RMSE (density target only)
 #   'SI_mean'           negative mean Scatter Index  (density target only)
-OBJECTIVE_METRIC = "weighted_mean_SS"
+OBJECTIVE_METRIC = "Hs_SS"
 
 # Process data
 buoy_number = "42056"
@@ -148,8 +150,9 @@ for lead_time_hours in lead_times_hours:
     sampler = optuna.samplers.TPESampler(
         n_startup_trials=20, multivariate=True, seed=42
     )
-    # num_epochs=100, early stopping patience=10 → ~20% warmup = 40 steps
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=20, n_min_trials=5, interval_steps=1)
+    # 30-step warmup avoids the over-pruning seen at exactly epoch 20 in earlier
+    # studies (54% of 12h trials pruned at the boundary with n_warmup_steps=20).
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=30, n_min_trials=5, interval_steps=1)
     study = optuna.create_study(
         study_name=study_name,
         storage=f"sqlite:///optuna_study_{STUDY_VERSION}.db",

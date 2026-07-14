@@ -57,6 +57,16 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         'per_step_R2'        : list[float], R² per forecast step
         'overall_SS'         : float, Skill Score computed on overall flattened RMSE
 
+    Always present:
+        'Hs_SS'              : float, Skill Score for significant wave height.
+                               For target=='hs': equals overall_SS (predictions
+                               are already physical Hs, so this is exact).
+                               For target=='density': 1 − Hs_RMSE_model /
+                               Hs_RMSE_persistence, computed from denormalised
+                               spectra. Robust to seq_len variation; suitable
+                               as the Optuna objective when Hs accuracy is the
+                               primary goal.
+
     When model.target == 'density' and freq_means is not None, five additional
     metrics are appended (all in physical units — m²/Hz spectra, metres for
     Hs, seconds for Tm02 — because predictions are denormalised before any
@@ -169,6 +179,9 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     rmse_pers  = rmse_fn(y_pers_flat, y_true_flat).item()
     cc         = pearson_corrcoef(y_pred_flat, y_true_flat).item()
     overall_ss = 1.0 - rmse / rmse_pers if rmse_pers > 0 else float('nan')
+    # For hs target y_pred/y_true are physical Hs, so overall_SS == Hs_SS exactly.
+    # For density target this is overwritten below using denormalised Hs.
+    hs_ss = overall_ss
     bias       = (y_pred_flat - y_true_flat).mean().item()
     ss_res     = ((y_true_flat - y_pred_flat) ** 2).sum()
     ss_tot     = ((y_true_flat - y_true_flat.mean()) ** 2).sum()
@@ -214,6 +227,14 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         # so this ratio is well-behaved, unlike a per-bin spectral MAPE.
         hs_mape  = float(100.0 * np.mean(np.abs(hs_err) / np.abs(hs_true)))
 
+        # Hs Skill Score: normalise model RMSE against persistence Hs RMSE so
+        # the metric is robust to seq_len variation across Optuna trials.
+        pers_np      = y_pers_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
+        hs_pers, _   = compute_bulk_params(pers_np, freqs_np)
+        hs_rmse_pers = float(np.sqrt(np.mean((hs_pers - hs_true) ** 2)))
+        hs_rmse_model = float(np.sqrt(np.mean(hs_err ** 2)))
+        hs_ss = 1.0 - hs_rmse_model / hs_rmse_pers if hs_rmse_pers > 0 else float('nan')
+
         # --- Spectral shape error ---
         # Normalise both pred and true by the TARGET physical m₀ so that shape
         # errors are decoupled from energy magnitude errors.
@@ -246,7 +267,8 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         si_per_bin   = rmse_per_bin / mean_per_bin                           # (num_freqs,)
 
         bulk = {
-            'Hs_RMSE'             : float(np.sqrt(np.mean(hs_err   ** 2))),
+            'Hs_RMSE'             : hs_rmse_model,
+            'Hs_SS'               : hs_ss,
             'Hs_Bias'             : float(np.mean(hs_err)),
             'Hs_MAPE'             : hs_mape,
             'Tm02_RMSE'           : float(np.sqrt(np.mean(tm02_err ** 2))),
@@ -260,6 +282,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     return {
         'RMSE'               : rmse,
         'Hs_MAPE'            : hs_mape,
+        'Hs_SS'              : hs_ss,
         'CC'                 : cc,
         'Bias'               : bias,
         'R2'                 : r2,
