@@ -487,7 +487,7 @@ def main():
     for i, spec in enumerate(args.experiments):
         spec['color'] = CATEGORICAL_PALETTE[i % len(CATEGORICAL_PALETTE)]
 
-    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(project_root / 'buoy_data' / '32012' / 'processed_data.pkl')
+    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(project_root / 'buoy_data' / '42056' / 'processed_data.pkl')
     freqs = get_freqs(density)
     freqs_np = freqs.cpu().numpy() if torch.is_tensor(freqs) else np.asarray(freqs)
 

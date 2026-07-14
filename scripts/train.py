@@ -38,16 +38,16 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
-EXPERIMENT_NAME = "hs_shape_v6"
-BUOY_ID = '32012'
+EXPERIMENT_NAME = "wind_combined_v7"
+BUOY_ID = '42056'
 
 target = "hs"
-lead_times_hours = [6, 12, 24]
+lead_times_hours = [12]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
 CHANNEL_SET = "full"
-AUX_SET = "none"
+AUX_SET = "wind"
 assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 

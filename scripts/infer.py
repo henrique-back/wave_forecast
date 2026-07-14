@@ -36,6 +36,7 @@ from nn import WaveHeightBaselineNN
 from nn.optimization import _prepare_dataloaders
 from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
 
+BUOY_ID = '42056'
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
@@ -359,7 +360,7 @@ def run_combined(args, project_root, density, alpha_1, alpha_2, r_1, wind, freqs
 
     save_dir = None
     if args.save:
-        save_dir = hs_folder.parent / 'inference_plots_combined'
+        save_dir = hs_folder / 'inference_plots_combined'
         save_dir.mkdir(exist_ok=True)
 
     with torch.no_grad():
@@ -419,7 +420,7 @@ def main():
     args = parse_args()
     project_root = Path(__file__).resolve().parent.parent
 
-    file_path = project_root / 'buoy_data' / 'processed_data.pkl'
+    file_path = project_root / 'buoy_data' / BUOY_ID / 'processed_data.pkl'
     if not file_path.exists():
         raise FileNotFoundError(f"{file_path} not found — run scripts/data_processing.py first.")
     density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(file_path)
