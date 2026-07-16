@@ -1,6 +1,7 @@
 import math
 from pathlib import Path
 
+import numpy as np
 import optuna
 import torch
 from torch.utils.data import DataLoader
@@ -21,14 +22,18 @@ def _normalize(train_df, *other_dfs, mode='zscore'):
         use for channels that are not fed into physical computations (alpha, r1).
     mode='scale':  divide by per-column mean only.  Preserves non-negativity —
         required for spectral density, which is passed to compute_hs / sqrt().
+    mode='none':   pass through unchanged — for channels already on a fixed,
+        meaningful scale (e.g. sin/cos of a circular angle, already in [-1, 1]).
     """
     if mode == 'zscore':
         mean = train_df.mean()
         std = train_df.std().clip(lower=1e-8)
         return tuple((df - mean) / std for df in (train_df, *other_dfs))
-    else:  # 'scale'
+    elif mode == 'scale':
         mean = train_df.mean().clip(lower=1e-8)
         return tuple(df / mean for df in (train_df, *other_dfs))
+    else:  # 'none'
+        return (train_df, *other_dfs)
 
 
 def _weighted_mean_ss(per_step_ss):
@@ -243,14 +248,25 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
     train_density, val_density, test_density = _normalize(
         train_density, val_density, test_density, mode=NORM_MODES['density'])
 
-    # Alpha/r1 have no downstream physical constraint so z-score is safe. Only
+    # alpha_1/alpha_2 are circular (mean/principal wave direction, degrees) —
+    # decompose into sin/cos pairs so the model sees a continuous embedding
+    # where e.g. 1deg and 359deg are adjacent rather than z-scored raw angles
+    # that would place them at opposite extremes.
+    train_alpha1_sin, val_alpha1_sin, test_alpha1_sin = (np.sin(np.radians(df)) for df in (train_alpha1, val_alpha1, test_alpha_1))
+    train_alpha1_cos, val_alpha1_cos, test_alpha1_cos = (np.cos(np.radians(df)) for df in (train_alpha1, val_alpha1, test_alpha_1))
+    train_alpha2_sin, val_alpha2_sin, test_alpha2_sin = (np.sin(np.radians(df)) for df in (train_alpha2, val_alpha2, test_alpha_2))
+    train_alpha2_cos, val_alpha2_cos, test_alpha2_cos = (np.cos(np.radians(df)) for df in (train_alpha2, val_alpha2, test_alpha_2))
+
+    # r1 has no downstream physical constraint so z-score is safe. Only
     # normalise the ones this channel_set actually needs.
     channel_names = CHANNEL_SETS[channel_set]
     raw_channels = {
-        'density': (train_density, val_density, test_density),
-        'alpha_1': (train_alpha1, val_alpha1, test_alpha_1),
-        'alpha_2': (train_alpha2, val_alpha2, test_alpha_2),
-        'r_1':     (train_r1, val_r1, test_r1),
+        'density':     (train_density, val_density, test_density),
+        'alpha_1_sin': (train_alpha1_sin, val_alpha1_sin, test_alpha1_sin),
+        'alpha_1_cos': (train_alpha1_cos, val_alpha1_cos, test_alpha1_cos),
+        'alpha_2_sin': (train_alpha2_sin, val_alpha2_sin, test_alpha2_sin),
+        'alpha_2_cos': (train_alpha2_cos, val_alpha2_cos, test_alpha2_cos),
+        'r_1':         (train_r1, val_r1, test_r1),
     }
     normalized = {'density': (train_density, val_density, test_density)}
     for name in channel_names:

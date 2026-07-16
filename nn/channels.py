@@ -14,14 +14,19 @@ Two independent axes select the model's encoder input:
 
 CHANNEL_SETS = {
     'density': ['density'],
-    'full':    ['density', 'alpha_1', 'alpha_2', 'r_1'],
+    # alpha_1/alpha_2 are circular (mean/principal wave direction, degrees) —
+    # fed as sin/cos pairs rather than the raw angle so that e.g. 1deg and
+    # 359deg are adjacent to the model instead of maximally far apart.
+    'full':    ['density', 'alpha_1_sin', 'alpha_1_cos', 'alpha_2_sin', 'alpha_2_cos', 'r_1'],
 }
 
 NORM_MODES = {
-    'density': 'scale',   # non-negativity required for compute_hs / sqrt
-    'alpha_1': 'zscore',
-    'alpha_2': 'zscore',
-    'r_1':     'zscore',
+    'density':     'scale',  # non-negativity required for compute_hs / sqrt
+    'alpha_1_sin': 'none',   # already in [-1, 1]; z-scoring would just distort a valid unit circle
+    'alpha_1_cos': 'none',
+    'alpha_2_sin': 'none',
+    'alpha_2_cos': 'none',
+    'r_1':         'zscore',
 }
 
 AUX_CHANNEL_SETS = {

@@ -7,6 +7,25 @@ from utils import read_txt, add_datetime_index, check_time
 # columns we read. Must be masked to NaN before any interpolation.
 _WIND_SENTINELS = {'WDIR': 999, 'WSPD': 99.0}
 
+# alpha_1/alpha_2 (mean/principal wave direction per frequency bin, degrees)
+# are circular, same as WDIR above.
+_CIRCULAR_DEGREE_KEYS = {'alpha_1', 'alpha_2'}
+
+
+def _interpolate_circular_degrees(df, full_index):
+    """Time-interpolate a DataFrame of angles (degrees, circular) per column.
+
+    Same wraparound problem as WDIR in process_wind(): linearly interpolating
+    a raw angle across a gap (e.g. 350deg -> 10deg) passes through 180deg
+    instead of through 0deg. Decomposing into sin/cos, interpolating those,
+    and recombining via atan2 keeps the interpolation on the correct (short)
+    arc, per frequency bin.
+    """
+    theta = np.radians(df)
+    sin_part = np.sin(theta).reindex(full_index).interpolate(method='time', limit_direction='both')
+    cos_part = np.cos(theta).reindex(full_index).interpolate(method='time', limit_direction='both')
+    return np.degrees(np.arctan2(sin_part, cos_part)) % 360
+
 
 def process_wind(folder_path, filename='wind.txt'):
     """
@@ -90,8 +109,9 @@ def data_processing(folder_path, save_path=None):
     full_index = pd.date_range(start=start, end=end, freq='h')
 
     dfs_interpolated = [
-        df.reindex(full_index).interpolate(method='time', limit_direction='both')
-        for df in data.values()
+        _interpolate_circular_degrees(df, full_index) if key in _CIRCULAR_DEGREE_KEYS
+        else df.reindex(full_index).interpolate(method='time', limit_direction='both')
+        for key, df in data.items()
     ]
 
     # Check time consistency
