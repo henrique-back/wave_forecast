@@ -1,26 +1,31 @@
 """
-Compare forecast accuracy between two OR MORE experiments on the FULL PHYSICAL
-DENSITY SPECTRUM E(f) — i.e. the metric set nn/evaluate.py computes for a
-'density'-target model — regardless of whether an experiment trains a single
-monolithic 'density' model (e.g. weightedmeanSS_conv_freqemb_v3) or a split
-'hs' + 'shape' pair recombined at inference time (e.g. hs_shape_v5, see
-CLAUDE.md's shape/magnitude model split and scripts/infer.py --target
-combined). This lets you ask "is experiment B actually better at forecasting
-the spectrum than experiment A?" even when B never trains a density model
-directly — and extends the same question across any number of experiments.
+Compare forecast accuracy between two OR MORE experiments.
 
-For a 'combined' experiment, E_pred(f, t) = shape_pred(f, t) * m0_pred(t),
-m0_pred = (Hs_pred / 4)^2, evaluated over the ENTIRE test set (not just a
-handful of samples like scripts/infer.py's inspection mode). When at least one
-compared experiment uses target=combined, per_step.png additionally breaks
-out the per-step Hs RMSE (the bulk parameter driving that recombination) for
-every experiment, so you can see whether spectrum-level errors trace back to
-the Hs sub-model specifically.
+Two comparison families, chosen by the TARGET(s) given:
 
-All experiments are evaluated with the exact same metric computation (a local
-re-implementation of nn/evaluate.py's density-target block operating on numpy
-arrays), so results are directly comparable regardless of which path produced
-them.
+- SPECTRUM family (target 'density' and/or 'combined', freely mixable): full
+  physical density spectrum E(f) comparison — the metric set nn/evaluate.py
+  computes for a 'density'-target model — regardless of whether an experiment
+  trains a single monolithic 'density' model (e.g. weightedmeanSS_conv_freqemb_v3)
+  or a split 'hs' + 'shape' pair recombined at inference time (e.g. hs_shape_v5,
+  see CLAUDE.md's shape/magnitude model split and scripts/infer.py --target
+  combined). For a 'combined' experiment, E_pred(f, t) = shape_pred(f, t) *
+  m0_pred(t), m0_pred = (Hs_pred / 4)^2. When at least one compared experiment
+  uses target=combined, per_step.png additionally breaks out the per-step Hs
+  RMSE (the bulk parameter driving that recombination). Produces
+  summary_bars.png, per_step.png, si_per_bin.png, example_spectra.png.
+
+- SCALAR family (target 'hs' or 'shape', all experiments must share the SAME
+  one — Hs metres and shape unit-area RMSE aren't on comparable scales):
+  each checkpoint's own nn/evaluate.py metrics (RMSE, R2, CC, Hs_MAPE/overall_SS
+  etc.), evaluated over the full test set directly — no recombination, no
+  spectrum-only plots (those require a physical E(f), which a lone hs or shape
+  checkpoint doesn't produce).
+
+All experiments in a family are evaluated with the exact same metric
+computation, so results are directly comparable regardless of which path
+produced them. Both families write metrics.json under the same results/comparisons/
+convention.
 
 Usage:
     python scripts/compare_versions.py \
@@ -29,9 +34,14 @@ Usage:
         --experiment hs_shape_v6:combined:"HS+Shape v6" \
         --lead 6
 
+    python scripts/compare_versions.py \
+        --experiment hs_shape_v5:hs \
+        --experiment hs_shape_v6:hs \
+        --lead 6
+
 Each --experiment is repeatable (2 or more required) and formatted as
-NAME:TARGET[:LABEL], where TARGET is 'density' or 'combined' and LABEL
-defaults to NAME if omitted.
+NAME:TARGET[:LABEL], where TARGET is 'density', 'combined', 'hs', or 'shape'
+and LABEL defaults to NAME if omitted.
 """
 import sys
 import os
@@ -45,10 +55,15 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 
-from utils import get_freqs, get_start_token, compute_bulk_params, get_device
-from nn import WaveHeightBaselineNN
+from utils import get_freqs, get_device
+from nn import evaluate
+from nn.checkpoints import find_checkpoint, build_model
+from nn.spectrum_eval import eval_single_density, eval_combined, compute_density_metrics
 from nn.optimization import _prepare_dataloaders
 from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
+
+SPECTRUM_TARGETS = {'density', 'combined'}
+SCALAR_TARGETS = {'hs', 'shape'}
 
 # Categorical slots from the project's validated palette (references/palette.md
 # in the dataviz skill), in fixed hue order — assigned to experiments in the
@@ -66,8 +81,6 @@ CATEGORICAL_PALETTE = [
 COLOR_TRUE = '#0b0b0b'
 COLOR_PERS = '#898781'
 
-M0_MASK_THRESHOLD = 1e-4  # m²; matches nn/evaluate.py
-
 
 def parse_experiment_spec(s):
     parts = s.split(':')
@@ -76,9 +89,10 @@ def parse_experiment_spec(s):
             f"--experiment must be formatted NAME:TARGET[:LABEL], got {s!r}")
     name, target = parts[0], parts[1]
     label = parts[2] if len(parts) == 3 else name
-    if target not in ('density', 'combined'):
+    if target not in SPECTRUM_TARGETS | SCALAR_TARGETS:
         raise argparse.ArgumentTypeError(
-            f"target must be 'density' or 'combined', got {target!r} (in {s!r})")
+            f"target must be one of {sorted(SPECTRUM_TARGETS | SCALAR_TARGETS)}, "
+            f"got {target!r} (in {s!r})")
     return {'name': name, 'target': target, 'label': label}
 
 
@@ -88,8 +102,11 @@ def parse_args():
     p.add_argument('--experiment', dest='experiments', action='append', required=True,
                    type=parse_experiment_spec, metavar='NAME:TARGET[:LABEL]',
                    help="Repeatable, at least 2 required. TARGET is 'density' "
-                        "('density'-target checkpoint) or 'combined' (recombine "
-                        "that experiment's 'hs' + 'shape' checkpoints). LABEL "
+                        "('density'-target checkpoint), 'combined' (recombine "
+                        "that experiment's 'hs' + 'shape' checkpoints), or a lone "
+                        "'hs'/'shape' checkpoint compared on its own metrics "
+                        "(density/combined are freely mixable with each other; "
+                        "hs/shape must all match — see module docstring). LABEL "
                         "is the display name, defaults to NAME.")
 
     p.add_argument('--lead', type=int, required=True, help='Lead time in hours')
@@ -97,240 +114,78 @@ def parse_args():
     p.add_argument('--channel-set', default='full', choices=list(CHANNEL_SETS))
     p.add_argument('--aux-set', default='none', choices=list(AUX_CHANNEL_SETS))
     p.add_argument('--n-example-samples', type=int, default=4,
-                   help='Number of example forecast times to plot full spectra for')
+                   help='Number of example forecast times to plot full spectra for '
+                        '(spectrum family only)')
     p.add_argument('--out-dir', default=None,
                    help='Where to write metrics.json and plots (default: '
                         'results/comparisons/{name1}_vs_{name2}_vs_.../lead_{N}h)')
     args = p.parse_args()
     if len(args.experiments) < 2:
         p.error('at least 2 --experiment entries are required for a comparison')
+
+    targets = {spec['target'] for spec in args.experiments}
+    if not (targets <= SPECTRUM_TARGETS or len(targets) == 1):
+        p.error(f"cannot mix targets {sorted(targets)} — density/combined are freely "
+                f"mixable with each other, but hs/shape must all match (Hs metres and "
+                f"shape unit-area RMSE aren't on comparable scales)")
     return args
-
-
-def find_checkpoint(project_root, experiment, target, lead, seed):
-    """Same lookup convention as scripts/infer.py's find_checkpoint."""
-    candidates = [
-        project_root / 'results' / experiment / target / f'lead_{lead}h' / f'final_model_seed{seed}.pt',
-        project_root / 'results' / experiment / target / f'lead_{lead}h' / f'final_model_seed{seed}.pt',
-    ]
-    for c in candidates:
-        if c.exists():
-            print(f"  loaded {target!r} checkpoint: {c}")
-            return torch.load(c, map_location='cpu', weights_only=False)
-    raise FileNotFoundError(f"No checkpoint for experiment={experiment!r} target={target!r} "
-                            f"lead={lead}h seed={seed}. Looked in {candidates}.")
-
-
-def build_model(ckpt, freqs, device, channel_set, aux_set):
-    p = ckpt['params']
-    model = WaveHeightBaselineNN(
-        num_freqs=len(freqs), freqs=freqs, target=ckpt['target'],
-        num_channels=len(CHANNEL_SETS[channel_set]),
-        num_aux_channels=len(AUX_CHANNEL_SETS[aux_set]),
-        dropout=p['dropout'], nhead=p['nhead'],
-        num_encoder_layers=p['num_encoder_layers'],
-        num_decoder_layers=p['num_decoder_layers'],
-        embed_dim=p['head_dim'] * p['nhead'],
-    )
-    model.load_state_dict(ckpt['model_state_dict'])
-    model.to(device).eval()
-    return model
-
-
-def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, wind_d,
-                        freqs, device, channel_set, aux_set, seed):
-    """Autoregressive inference for a monolithic density-target checkpoint.
-
-    Returns physical (pred, true, pers) arrays of shape (N, lead_time, num_freqs)
-    plus lead_time_steps and t0_start — the test-split-relative row index of
-    the first forecast step for sample 0 (samples are contiguous: sample j's
-    forecast starts at t0_start + j, since the test DataLoader is unshuffled).
-    """
-    params = ckpt['params']
-    model = build_model(ckpt, freqs, device, channel_set, aux_set)
-    freq_means = ckpt['freq_means'].to(device)
-    fm_np = freq_means.cpu().numpy()
-    lead_time_steps = ckpt['lead_time_steps']
-
-    _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d, alpha_1_d, alpha_2_d, r_1_d, params['seq_len'], lead_time_steps,
-        params['batch_size'], 'density', shuffle_seed=seed, wind=wind_d,
-        channel_set=channel_set, aux_set=aux_set)
-
-    all_pred, all_true, all_pers = [], [], []
-    with torch.no_grad():
-        for X, aux, y in test_loader:
-            X, aux, y = X.to(device), aux.to(device), y.to(device)
-            start_token = get_start_token(X, 'density', freqs, device, freq_means=freq_means)
-            pers = start_token.unsqueeze(1).expand(-1, y.shape[1], -1)
-            pred = model.infer(X, freqs, lead_time_steps, freq_means=freq_means, aux=aux)
-
-            all_pred.append(pred.cpu().numpy() * fm_np)
-            all_true.append(y.cpu().numpy() * fm_np)
-            all_pers.append(pers.cpu().numpy() * fm_np)
-
-    pred_np = np.concatenate(all_pred, axis=0)
-    true_np = np.concatenate(all_true, axis=0)
-    pers_np = np.concatenate(all_pers, axis=0)
-    t0_start = params['seq_len']
-    return pred_np, true_np, pers_np, lead_time_steps, t0_start
-
-
-def eval_combined(project_root, experiment, lead, seed, density_d, alpha_1_d,
-                  alpha_2_d, r_1_d, wind_d, freqs, device, channel_set, aux_set):
-    """Recombine an experiment's separately-trained 'hs' and 'shape' checkpoints
-    into a full physical density spectrum, evaluated over the entire test set
-    (see scripts/infer.py's --target combined, which does this for a handful
-    of inspection samples only).
-
-    Returns the same (pred, true, pers, lead_time_steps, t0_start) shape as
-    eval_single_density, so downstream code is agnostic to which path produced it.
-    """
-    hs_ckpt = find_checkpoint(project_root, experiment, 'hs', lead, seed)
-    shape_ckpt = find_checkpoint(project_root, experiment, 'shape', lead, seed)
-    lead_time_steps = hs_ckpt['lead_time_steps']
-    if shape_ckpt['lead_time_steps'] != lead_time_steps:
-        raise ValueError(f"hs lead_time_steps={lead_time_steps} != "
-                         f"shape lead_time_steps={shape_ckpt['lead_time_steps']}")
-
-    hs_model = build_model(hs_ckpt, freqs, device, channel_set, aux_set)
-    shape_model = build_model(shape_ckpt, freqs, device, channel_set, aux_set)
-    hs_freq_means = hs_ckpt['freq_means'].to(device)
-    shape_freq_means = shape_ckpt['freq_means'].to(device)
-    hs_params = hs_ckpt['params']
-    shape_params = shape_ckpt['params']
-
-    _, _, hs_test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d, alpha_1_d, alpha_2_d, r_1_d, hs_params['seq_len'], lead_time_steps,
-        hs_params['batch_size'], 'hs', shuffle_seed=seed, wind=wind_d,
-        channel_set=channel_set, aux_set=aux_set)
-    _, _, shape_test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d, alpha_1_d, alpha_2_d, r_1_d, shape_params['seq_len'], lead_time_steps,
-        shape_params['batch_size'], 'shape', shuffle_seed=seed, wind=wind_d,
-        channel_set=channel_set, aux_set=aux_set)
-    hs_dataset = hs_test_loader.dataset
-    shape_dataset = shape_test_loader.dataset
-
-    n = len(density_d)
-    val_end = int(0.85 * n)
-    test_density_vals = density_d[val_end:].values
-
-    # Each sub-model was tuned with its own seq_len, so their test datasets
-    # are windowed differently; only forecast-start points t0 covered by BOTH
-    # models' encoder windows can be recombined (see scripts/infer.py's
-    # run_combined for the same alignment logic, applied there to a handful
-    # of samples instead of the whole test set).
-    t0_start = max(hs_params['seq_len'], shape_params['seq_len'])
-    t0_end = len(test_density_vals) - lead_time_steps - 1
-    t0_values = list(range(t0_start, t0_end + 1))
-
-    all_pred, all_true, all_pers = [], [], []
-    BATCH = 128
-    with torch.no_grad():
-        for i in range(0, len(t0_values), BATCH):
-            chunk = t0_values[i:i + BATCH]
-            idx_hs = [t0 - hs_params['seq_len'] for t0 in chunk]
-            idx_shape = [t0 - shape_params['seq_len'] for t0 in chunk]
-
-            X_hs = hs_dataset.X[idx_hs].to(device)
-            aux_hs = hs_dataset.aux[idx_hs].to(device)
-            X_shape = shape_dataset.X[idx_shape].to(device)
-            aux_shape = shape_dataset.aux[idx_shape].to(device)
-
-            hs_pred = hs_model.infer(X_hs, freqs, lead_time_steps, freq_means=hs_freq_means, aux=aux_hs)
-            shape_pred = shape_model.infer(X_shape, freqs, lead_time_steps, freq_means=shape_freq_means, aux=aux_shape)
-
-            shape_pred_np = shape_pred.cpu().numpy()
-            m0_pred = ((hs_pred / 4.0) ** 2).cpu().numpy()
-            pred_phys = shape_pred_np * m0_pred
-
-            true_phys = np.stack([test_density_vals[t0:t0 + lead_time_steps] for t0 in chunk])
-            pers_phys = np.stack([np.tile(test_density_vals[t0 - 1], (lead_time_steps, 1)) for t0 in chunk])
-
-            all_pred.append(pred_phys)
-            all_true.append(true_phys)
-            all_pers.append(pers_phys)
-
-    pred_np = np.concatenate(all_pred, axis=0)
-    true_np = np.concatenate(all_true, axis=0)
-    pers_np = np.concatenate(all_pers, axis=0)
-    return pred_np, true_np, pers_np, lead_time_steps, t0_start
-
-
-def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
-    """Mirrors nn/evaluate.py's overall + density-target-only metric block,
-    operating on physical numpy arrays of shape (N, lead_time, num_freqs)
-    instead of a live model + dataloader, so it applies identically whether
-    the arrays came from a single density model or a recombined hs+shape pair.
-    """
-    def rmse(a, b):
-        return float(np.sqrt(np.mean((a - b) ** 2)))
-
-    per_step_rmse, per_step_rmse_pers, per_step_ss, per_step_bias, per_step_r2 = [], [], [], [], []
-    for step in range(pred_np.shape[1]):
-        p, t, pe = pred_np[:, step, :].flatten(), true_np[:, step, :].flatten(), pers_np[:, step, :].flatten()
-        r_s, r_p = rmse(p, t), rmse(pe, t)
-        per_step_rmse.append(r_s)
-        per_step_rmse_pers.append(r_p)
-        per_step_ss.append(1.0 - r_s / r_p if r_p > 0 else float('nan'))
-        per_step_bias.append(float(np.mean(p - t)))
-        ss_res, ss_tot = np.sum((t - p) ** 2), np.sum((t - t.mean()) ** 2)
-        per_step_r2.append(float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float('nan'))
-
-    pred_flat, true_flat, pers_flat = pred_np.flatten(), true_np.flatten(), pers_np.flatten()
-    overall_rmse = rmse(pred_flat, true_flat)
-    overall_rmse_pers = rmse(pers_flat, true_flat)
-    overall_ss = 1.0 - overall_rmse / overall_rmse_pers if overall_rmse_pers > 0 else float('nan')
-    cc = float(np.corrcoef(pred_flat, true_flat)[0, 1])
-    bias = float(np.mean(pred_flat - true_flat))
-    ss_res, ss_tot = np.sum((true_flat - pred_flat) ** 2), np.sum((true_flat - true_flat.mean()) ** 2)
-    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float('nan')
-
-    hs_pred, tm02_pred = compute_bulk_params(pred_np, freqs_np)
-    hs_true, tm02_true = compute_bulk_params(true_np, freqs_np)
-    hs_pers, _ = compute_bulk_params(pers_np, freqs_np)
-    hs_err, tm02_err = hs_pred - hs_true, tm02_pred - tm02_true
-    hs_err_pers = hs_pers - hs_true
-    hs_mape = float(100.0 * np.mean(np.abs(hs_err) / np.abs(hs_true)))
-
-    # hs_err/hs_err_pers are (N, lead_time) — collapsing over axis=0 instead of
-    # flattening gives the per-forecast-step Hs RMSE alongside the overall one.
-    per_step_hs_rmse = np.sqrt((hs_err ** 2).mean(axis=0)).tolist()
-    per_step_hs_rmse_pers = np.sqrt((hs_err_pers ** 2).mean(axis=0)).tolist()
-
-    m0_true = np.trapezoid(true_np, freqs_np, axis=2)
-    valid = m0_true >= M0_MASK_THRESHOLD
-    n_masked = int((~valid).sum())
-    m0_denom = np.where(valid, m0_true, 1.0)[:, :, np.newaxis]
-    shape_pred_norm, shape_true_norm = pred_np / m0_denom, true_np / m0_denom
-    per_spectrum_rmse = np.sqrt(((shape_pred_norm - shape_true_norm) ** 2).mean(axis=2))
-    shape_rmse = float(per_spectrum_rmse[valid].mean()) if valid.any() else float('nan')
-
-    flat_pred = pred_np.reshape(-1, pred_np.shape[2])
-    flat_true = true_np.reshape(-1, true_np.shape[2])
-    rmse_per_bin = np.sqrt(((flat_pred - flat_true) ** 2).mean(axis=0))
-    mean_per_bin = flat_true.mean(axis=0).clip(min=1e-12)
-    si_per_bin = rmse_per_bin / mean_per_bin
-
-    return {
-        'n_samples': int(pred_np.shape[0]),
-        'RMSE': overall_rmse, 'CC': cc, 'Bias': bias, 'R2': r2,
-        'per_step_RMSE': per_step_rmse, 'per_step_RMSE_pers': per_step_rmse_pers,
-        'per_step_SS': per_step_ss, 'per_step_Bias': per_step_bias, 'per_step_R2': per_step_r2,
-        'overall_SS': overall_ss,
-        'Hs_MAPE': hs_mape,
-        'Hs_RMSE': float(np.sqrt(np.mean(hs_err ** 2))), 'Hs_Bias': float(np.mean(hs_err)),
-        'per_step_Hs_RMSE': per_step_hs_rmse, 'per_step_Hs_RMSE_pers': per_step_hs_rmse_pers,
-        'Tm02_RMSE': float(np.sqrt(np.mean(tm02_err ** 2))), 'Tm02_Bias': float(np.mean(tm02_err)),
-        'Shape_RMSE': shape_rmse, 'Shape_masked_samples': n_masked,
-        'SI_per_bin': si_per_bin.tolist(), 'SI_mean': float(si_per_bin.mean()),
-    }
 
 
 SUMMARY_METRICS = [
     ('RMSE', 'm²/Hz'), ('R2', ''), ('CC', ''),
     ('Hs_RMSE', 'm'), ('Tm02_RMSE', 's'), ('Shape_RMSE', ''), ('SI_mean', ''),
 ]
+
+# Scalar family: a lone 'hs' or 'shape' checkpoint has no physical spectrum to
+# derive Hs_RMSE/Tm02_RMSE/Shape_RMSE/SI from — these are nn/evaluate.py's own
+# metrics for that target, evaluated directly (see load_scalar).
+SUMMARY_METRICS_SCALAR = {
+    'hs': [('RMSE', 'm'), ('Hs_MAPE', '%'), ('R2', ''), ('CC', '')],
+    'shape': [('RMSE', ''), ('R2', ''), ('CC', '')],
+}
+
+
+def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, wind,
+                freqs, device, channel_set, aux_set):
+    """Full test-set nn/evaluate.py metrics for a lone 'hs' or 'shape' checkpoint —
+    no spectrum recombination, just that model's own predictions vs its own target."""
+    ckpt, _ = find_checkpoint(project_root, spec['name'], spec['target'], 1, lead, seed)
+    model = build_model(ckpt, freqs, device, channel_set, aux_set)
+    freq_means = ckpt['freq_means'].to(device)
+    lead_time_steps = ckpt['lead_time_steps']
+    params = ckpt['params']
+    _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
+        density, alpha_1, alpha_2, r_1, params['seq_len'], lead_time_steps,
+        params['batch_size'], spec['target'], shuffle_seed=seed, wind=wind,
+        channel_set=channel_set, aux_set=aux_set)
+    metrics = evaluate(model, test_loader, device, freqs,
+                       lead_time=lead_time_steps, freq_means=freq_means)
+    return metrics, lead_time_steps
+
+
+def print_scalar_comparison(results, target):
+    labels = [r['label'] for r in results]
+    col_w = 16
+    metrics = SUMMARY_METRICS_SCALAR[target]
+    print(f"\n{'Metric':<{col_w}}" + ''.join(f"{l:>18}" for l in labels))
+    print('-' * (col_w + 18 * len(labels)))
+    for key, unit in metrics:
+        row = f"{key:<{col_w}}"
+        for r in results:
+            row += f"{r['metrics'][key]:>15.4f} {unit:<2}"
+        print(row)
+    print(f"{'overall_SS':<{col_w}}" + ''.join(f"{r['metrics']['overall_SS']:>18.4f}" for r in results))
+
+    if len(results) > 1:
+        base = results[0]
+        others = results[1:]
+        print(f"\nΔ vs {base['label']} (per-metric, later experiment minus baseline):")
+        print(f"{'Metric':<{col_w}}" + ''.join(f"{r['label']:>18}" for r in others))
+        for key, unit in metrics:
+            row = f"{key:<{col_w}}"
+            for r in others:
+                row += f"{(r['metrics'][key] - base['metrics'][key]):>+15.4f} {unit:<2}"
+            print(row)
 
 
 def print_comparison(results):
@@ -487,17 +342,56 @@ def main():
     for i, spec in enumerate(args.experiments):
         spec['color'] = CATEGORICAL_PALETTE[i % len(CATEGORICAL_PALETTE)]
 
-    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(project_root / 'buoy_data' / '32012' / 'processed_data.pkl')
+    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(project_root / 'buoy_data' / '42056' / 'processed_data.pkl')
     freqs = get_freqs(density)
     freqs_np = freqs.cpu().numpy() if torch.is_tensor(freqs) else np.asarray(freqs)
 
+    out_dir = Path(args.out_dir) if args.out_dir else (
+        project_root / 'results' / 'comparisons' / '_vs_'.join(s['name'] for s in args.experiments) / f'lead_{args.lead}h')
+
+    targets = {spec['target'] for spec in args.experiments}
+    if targets <= SCALAR_TARGETS:
+        target = next(iter(targets))
+        results = []
+        for spec in args.experiments:
+            print(f"\nEvaluating {spec['label']} (target={spec['target']})")
+            metrics, lead_time_steps = load_scalar(
+                project_root, spec, args.lead, args.seed, density, alpha_1, alpha_2, r_1,
+                wind, freqs, device, args.channel_set, args.aux_set)
+            results.append({**spec, 'metrics': metrics, 'lead_time_steps': lead_time_steps})
+
+        lead_time_steps = results[0]['lead_time_steps']
+        for r in results[1:]:
+            if r['lead_time_steps'] != lead_time_steps:
+                raise ValueError(f"lead_time_steps mismatch: {results[0]['label']}={lead_time_steps} "
+                                 f"{r['label']}={r['lead_time_steps']} — comparison requires the same forecast horizon.")
+
+        print_scalar_comparison(results, target)
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / 'metrics.json', 'w') as f:
+            json.dump({
+                'experiments': [
+                    {'name': r['name'], 'label': r['label'], 'target': r['target'], 'metrics': r['metrics']}
+                    for r in results
+                ]
+            }, f, indent=2)
+        print(f"\nSaved metrics.json to {out_dir}")
+        print(f"target={target!r} has no physical spectrum — skipping summary_bars/"
+              f"per_step/si_per_bin/example_spectra (spectrum family only).")
+        print(f"\nDone. All outputs under {out_dir}")
+        return
+
     def load(spec):
         if spec['target'] == 'density':
-            ckpt = find_checkpoint(project_root, spec['name'], 'density', args.lead, args.seed)
+            # deltat is not yet a CLI option here — 1 matches this script's
+            # previous (undownsampled) behavior; find_checkpoint still falls
+            # back to the pre-deltat results path for older experiments.
+            ckpt, _ = find_checkpoint(project_root, spec['name'], 'density', 1, args.lead, args.seed)
             return eval_single_density(ckpt, density, alpha_1, alpha_2, r_1, wind,
                                        freqs, device, args.channel_set, args.aux_set, args.seed)
         else:
-            return eval_combined(project_root, spec['name'], args.lead, args.seed,
+            return eval_combined(project_root, spec['name'], 1, args.lead, args.seed,
                                  density, alpha_1, alpha_2, r_1, wind,
                                  freqs, device, args.channel_set, args.aux_set)
 
@@ -518,8 +412,6 @@ def main():
         r['metrics'] = compute_density_metrics(r['pred'], r['true'], r['pers'], freqs_np)
     print_comparison(results)
 
-    out_dir = Path(args.out_dir) if args.out_dir else (
-        project_root / 'results' / 'comparisons' / '_vs_'.join(r['name'] for r in results) / f'lead_{args.lead}h')
     out_dir.mkdir(parents=True, exist_ok=True)
 
     with open(out_dir / 'metrics.json', 'w') as f:

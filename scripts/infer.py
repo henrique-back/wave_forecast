@@ -8,17 +8,25 @@ prints per-sample bulk parameters (Hs, Tm02) across the forecast horizon, and
 plots predicted vs true vs persistence.
 
 --target combined loads a separate 'hs' checkpoint and 'shape' checkpoint
-(same experiment/deltat/lead) and recombines them into a physical spectrum:
+(same experiment/lead) and recombines them into a physical spectrum:
     E_pred(f, t) = shape_pred(f, t) * m0_pred(t),  m0_pred = (Hs_pred / 4)^2
 This is the shape/magnitude model split described in CLAUDE.md — see the
 project discussion of why a single density-target model tends to
 underestimate spectral peaks and over-smooth the high-frequency tail.
 
+--save-metrics additionally runs a full pass over the ENTIRE test set (not
+just the inspected samples) and writes the resulting metrics into
+results/inference_metrics/{experiment}.json, nested under [target][lead_Nh]
+— the same metric set scripts/compare_versions.py computes, but for a single
+experiment, so a self-comparison run is no longer needed just to get a
+study's own numbers on file.
+
 Usage:
     python scripts/infer.py --experiment weightedmeanSS_conv_freqemb_v3 --lead 6
     python scripts/infer.py --experiment weightedmeanSS_conv_freqemb_v3 --lead 6 \
         --index 42 --save
-    python scripts/infer.py --experiment hs_shape_v5 --target combined --lead 6
+    python scripts/infer.py --experiment hs_shape_v5 --target combined --lead 6 \
+        --save-metrics
 """
 
 import sys
@@ -26,6 +34,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -34,11 +43,13 @@ import torch
 import matplotlib.pyplot as plt
 
 from utils import get_freqs, compute_bulk_params, get_start_token, get_device
-from nn import WaveHeightBaselineNN
+from nn import evaluate
+from nn.checkpoints import find_checkpoint, build_model
+from nn.spectrum_eval import eval_combined, compute_density_metrics
 from nn.optimization import _prepare_dataloaders
 from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
 
-BUOY_ID = "32012"  # used to locate the processed_data.pkl file
+BUOY_ID = "42056"
 
 
 def parse_args():
@@ -55,9 +66,8 @@ def parse_args():
         default="density",
         choices=["density", "hs", "shape", "combined"],
         help="'combined' loads both an 'hs' and a 'shape' checkpoint under the same "
-        "experiment/deltat/lead and recombines them into a physical spectrum",
+        "experiment/lead and recombines them into a physical spectrum",
     )
-    p.add_argument("--deltat", type=int, default=1)
     p.add_argument("--lead", type=int, required=True, help="Lead time in hours")
     p.add_argument(
         "--seed", type=int, default=42, help="Seed suffix of the checkpoint to load"
@@ -106,64 +116,30 @@ def parse_args():
         action="store_true",
         help="Also save each figure as PNG under the checkpoint folder",
     )
+    p.add_argument(
+        "--save-metrics",
+        action="store_true",
+        help="Also run a full test-set evaluation (all samples, not just the "
+        "inspected ones) and write/update results/inference_metrics/"
+        "{experiment}.json with this target/lead's metrics",
+    )
     return p.parse_args()
 
 
-def find_checkpoint(project_root, experiment, target, deltat, lead, seed):
-    """Return (ckpt, results_folder) for the first checkpoint that exists.
-
-    Prefers scripts/train.py's final retrain (final_model_seed{N}.pt) over the
-    raw Optuna best_model.pt, and prefers the deltat-namespaced results path
-    (current scripts/optimize.py convention) over the older path some earlier
-    experiments were saved under (results/{experiment}/{target}/lead_{N}h/,
-    no deltat_{N} level) — e.g. results/hs_shape_v5 predates that convention.
-    """
-    candidate_folders = [
-        project_root
-        / "results"
-        / experiment
-        / target
-        / f"deltat_{deltat}"
-        / f"lead_{lead}h",
-        project_root / "results" / experiment / target / f"lead_{lead}h",
-    ]
-    candidate_files = [f"final_model_seed{seed}.pt", "best_model.pt"]
-
-    for folder in candidate_folders:
-        for fname in candidate_files:
-            ckpt_path = folder / fname
-            if ckpt_path.exists():
-                print(f"Loaded {target!r} checkpoint from {ckpt_path}")
-                return torch.load(
-                    ckpt_path, map_location="cpu", weights_only=False
-                ), folder
-
-    raise FileNotFoundError(
-        f"No checkpoint found for experiment={experiment!r} target={target!r} "
-        f"deltat={deltat} lead={lead}h seed={seed}. Looked for "
-        f"{candidate_files} under {[str(f) for f in candidate_folders]}."
-    )
-
-
-def build_model(ckpt, freqs, device, channel_set="full", aux_set="none"):
-    params = ckpt["params"]
-    embed_dim = params["head_dim"] * params["nhead"]
-    model = WaveHeightBaselineNN(
-        num_freqs=len(freqs),
-        freqs=freqs,
-        target=ckpt["target"],
-        num_channels=len(CHANNEL_SETS[channel_set]),
-        num_aux_channels=len(AUX_CHANNEL_SETS[aux_set]),
-        dropout=params["dropout"],
-        nhead=params["nhead"],
-        num_encoder_layers=params["num_encoder_layers"],
-        num_decoder_layers=params["num_decoder_layers"],
-        embed_dim=embed_dim,
-    )
-    model.load_state_dict(ckpt["model_state_dict"])
-    model.to(device)
-    model.eval()
-    return model
+def save_metrics_json(
+    project_root, experiment, target, lead, seed, channel_set, aux_set, metrics
+):
+    out_path = project_root / "results" / "inference_metrics" / f"{experiment}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(out_path.read_text()) if out_path.exists() else {}
+    data.setdefault(target, {})[f"lead_{lead}h"] = {
+        "seed": seed,
+        "channel_set": channel_set,
+        "aux_set": aux_set,
+        "metrics": metrics,
+    }
+    out_path.write_text(json.dumps(data, indent=2))
+    print(f"Saved full-test-set metrics → {out_path} [{target}/lead_{lead}h]")
 
 
 def select_indices(n_total, n_samples, index, random_pick, seed):
@@ -277,32 +253,26 @@ def run_single(
     args, project_root, density, alpha_1, alpha_2, r_1, wind, freqs, freqs_np, device
 ):
     ckpt, results_folder = find_checkpoint(
-        project_root, args.experiment, args.target, args.deltat, args.lead, args.seed
+        project_root, args.experiment, args.target, 1, args.lead, args.seed
     )
     model = build_model(ckpt, freqs, device, args.channel_set, args.aux_set)
     freq_means = ckpt["freq_means"].to(device)
     lead_time_steps = ckpt["lead_time_steps"]
     params = ckpt["params"]
 
-    density_d = density[:: args.deltat]
-    alpha_1_d = alpha_1[:: args.deltat]
-    alpha_2_d = alpha_2[:: args.deltat]
-    r_1_d = r_1[:: args.deltat]
-    wind_d = wind[:: args.deltat]
-
     # shuffle_seed only affects the (unused) train_loader's shuffle order —
     # the test split itself is deterministic and never shuffled.
     _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d,
-        alpha_1_d,
-        alpha_2_d,
-        r_1_d,
+        density,
+        alpha_1,
+        alpha_2,
+        r_1,
         params["seq_len"],
         lead_time_steps,
         params["batch_size"],
         args.target,
         shuffle_seed=args.seed,
-        wind=wind_d,
+        wind=wind,
         channel_set=args.channel_set,
         aux_set=args.aux_set,
     )
@@ -313,6 +283,27 @@ def run_single(
         n_total, args.n_samples, args.index, args.random, args.seed
     )
     print(f"Inspecting {len(indices)} test sample(s) out of {n_total}: {indices}")
+
+    if args.save_metrics:
+        print(f"Running full test-set evaluation ({n_total} samples)...")
+        full_metrics = evaluate(
+            model,
+            test_loader,
+            device,
+            freqs,
+            lead_time=lead_time_steps,
+            freq_means=freq_means,
+        )
+        save_metrics_json(
+            project_root,
+            args.experiment,
+            args.target,
+            args.lead,
+            args.seed,
+            args.channel_set,
+            args.aux_set,
+            full_metrics,
+        )
 
     save_dir = None
     if args.save:
@@ -414,10 +405,10 @@ def run_combined(
     args, project_root, density, alpha_1, alpha_2, r_1, wind, freqs, freqs_np, device
 ):
     hs_ckpt, hs_folder = find_checkpoint(
-        project_root, args.experiment, "hs", args.deltat, args.lead, args.seed
+        project_root, args.experiment, "hs", 1, args.lead, args.seed
     )
     shape_ckpt, shape_folder = find_checkpoint(
-        project_root, args.experiment, "shape", args.deltat, args.lead, args.seed
+        project_root, args.experiment, "shape", 1, args.lead, args.seed
     )
 
     lead_time_steps = hs_ckpt["lead_time_steps"]
@@ -434,41 +425,35 @@ def run_combined(
     hs_params = hs_ckpt["params"]
     shape_params = shape_ckpt["params"]
 
-    density_d = density[:: args.deltat]
-    alpha_1_d = alpha_1[:: args.deltat]
-    alpha_2_d = alpha_2[:: args.deltat]
-    r_1_d = r_1[:: args.deltat]
-    wind_d = wind[:: args.deltat]
-
     # Each model gets its own DataLoader built with its OWN seq_len — seq_len
     # is an independently tuned hyperparameter per target (here hs=48, shape=12
     # for the 6h study), so the two test datasets are windowed differently and
     # dataset index i does NOT refer to the same forecast time in both.
     _, _, hs_test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d,
-        alpha_1_d,
-        alpha_2_d,
-        r_1_d,
+        density,
+        alpha_1,
+        alpha_2,
+        r_1,
         hs_params["seq_len"],
         lead_time_steps,
         hs_params["batch_size"],
         "hs",
         shuffle_seed=args.seed,
-        wind=wind_d,
+        wind=wind,
         channel_set=args.channel_set,
         aux_set=args.aux_set,
     )
     _, _, shape_test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d,
-        alpha_1_d,
-        alpha_2_d,
-        r_1_d,
+        density,
+        alpha_1,
+        alpha_2,
+        r_1,
         shape_params["seq_len"],
         lead_time_steps,
         shape_params["batch_size"],
         "shape",
         shuffle_seed=args.seed,
-        wind=wind_d,
+        wind=wind,
         channel_set=args.channel_set,
         aux_set=args.aux_set,
     )
@@ -479,9 +464,9 @@ def run_combined(
     # split — same deterministic 70/15/15 positional split _prepare_dataloaders
     # uses internally — rather than either model's own (differently windowed)
     # y, so both are unambiguous regardless of seq_len.
-    n = len(density_d)
+    n = len(density)
     val_end = int(0.85 * n)
-    test_density_phys = density_d[val_end:]
+    test_density_phys = density[val_end:]
 
     # t0 = absolute row index (within the test split) of the first forecast
     # step. Sample i of a dataset built with seq_len S has forecast start
@@ -502,6 +487,36 @@ def run_combined(
     print(
         f"Inspecting {len(t0_values)} combined sample(s) out of {n_valid} valid: {t0_values}"
     )
+
+    if args.save_metrics:
+        print(f"Running full test-set evaluation ({n_valid} valid forecast starts)...")
+        pred_np, true_np, pers_np, _, _ = eval_combined(
+            project_root,
+            args.experiment,
+            1,
+            args.lead,
+            args.seed,
+            density,
+            alpha_1,
+            alpha_2,
+            r_1,
+            wind,
+            freqs,
+            device,
+            args.channel_set,
+            args.aux_set,
+        )
+        full_metrics = compute_density_metrics(pred_np, true_np, pers_np, freqs_np)
+        save_metrics_json(
+            project_root,
+            args.experiment,
+            "combined",
+            args.lead,
+            args.seed,
+            args.channel_set,
+            args.aux_set,
+            full_metrics,
+        )
 
     save_dir = None
     if args.save:

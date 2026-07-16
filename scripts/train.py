@@ -39,22 +39,22 @@ print("Current working directory:", os.getcwd())
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
 EXPERIMENT_NAME = "wind_combined_v7"
-BUOY_ID = "42056"
+BUOY_ID = '42056'
 
-target = "shape"
-lead_times_hours = [6, 12]
+target = "hs"
+lead_times_hours = [24]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
 CHANNEL_SET = "full"
-AUX_SET = "none"
+AUX_SET = "wind"
 assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
 # retrained model is selected the same way the search selected it.
-OBJECTIVE_METRIC = "weighted_mean_SS"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
 
 # Seeds to retrain with. A single seed trains one final model. Add more to
 # get a mean±std noise estimate across independent weight initializations and
