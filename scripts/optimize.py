@@ -37,18 +37,20 @@ STUDY_VERSION = "v8"
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "wind_combined_v8"
+EXPERIMENT_NAME = "shape_v8"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
     "Transformer with convolutional frontend and frequency-structured embedding."
+    "Implements attention pooling"
     "Uses weighted mean Skill Score as objective."
-    "Trains to predict Hs and spectral shape (density target) at 6h, 12h, 24h lead times."
-    "Uses wind_u/wind_v as auxiliary inputs.")
+    "Trains to predict spectral shape at 6h, 12h, 24h lead times."
+    "Fixes RMSE weighting to use utils.trapz_weights instead of flat mean over log-spaced frequency grid."
+)
 
 # Set parameters
 lead_times_hours = [6, 12, 24]
-target = "hs"
+target = "shape"
 n_trials = 50
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
@@ -63,7 +65,7 @@ assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_S
 # wind support).
 #   'none' : no auxiliary input (current default)
 #   'wind' : wind_u/wind_v
-AUX_SET = "wind"
+AUX_SET = "none"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
@@ -78,10 +80,10 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 #   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
 #   'Shape_RMSE'        negative spectral shape RMSE (density target only)
 #   'SI_mean'           negative mean Scatter Index  (density target only)
-OBJECTIVE_METRIC = "Hs_SS"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
 
 # Process data
-buoy_number = "42056"
+buoy_number = "32012"
 project_root = Path(__file__).resolve().parent.parent
 folder_path = project_root / "buoy_data" / buoy_number
 file_path = folder_path / "processed_data.pkl"
@@ -159,7 +161,9 @@ for lead_time_hours in lead_times_hours:
     )
     # 30-step warmup avoids the over-pruning seen at exactly epoch 20 in earlier
     # studies (54% of 12h trials pruned at the boundary with n_warmup_steps=20).
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=30, n_min_trials=5, interval_steps=1)
+    pruner = optuna.pruners.MedianPruner(
+        n_warmup_steps=30, n_min_trials=5, interval_steps=1
+    )
     study = optuna.create_study(
         study_name=study_name,
         storage=f"sqlite:///optuna_study_{STUDY_VERSION}.db",
