@@ -49,7 +49,13 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 
-from utils import get_freqs, compute_bulk_params, get_start_token, get_device, trapz_weights
+from utils import (
+    get_freqs,
+    compute_bulk_params,
+    get_start_token,
+    get_device,
+    trapz_weights,
+)
 from nn import evaluate
 from nn.checkpoints import find_checkpoint, build_model
 from nn.spectrum_eval import eval_combined, compute_density_metrics
@@ -234,7 +240,7 @@ def plot_shape_sample(idx, freqs_np, steps, pred_shape, true_shape, pers_shape):
 
 def plot_shape_test_set_summary(freqs_np, y_pred_all, y_true_all, y_pers_all, step):
     """Mean +/- std of S_true/S_pred/S_persistence across the whole test set,
-    for one forecast step — deliverable 1.1's aggregate (not per-sample) view.
+    for one forecast step view.
 
     y_pred_all/y_true_all/y_pers_all: (total_samples, lead_time, num_freqs)
     numpy arrays, as returned by nn.evaluate.evaluate(..., return_arrays=True).
@@ -256,8 +262,9 @@ def plot_shape_test_set_summary(freqs_np, y_pred_all, y_true_all, y_pers_all, st
 
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Shape E(f)/m₀ (unit area)")
-    ax.set_title(f"Test-set S_true vs S_pred — step {step + 1} "
-                 f"(mean ± std, n={pred.shape[0]})")
+    ax.set_title(
+        f"Test-set S_true vs S_pred — step {step + 1} (mean ± std, n={pred.shape[0]})"
+    )
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -334,8 +341,10 @@ def run_single(
     n_total = len(test_dataset)
 
     if args.aggregate:
-        print(f"Running full test-set evaluation for aggregate shape summary "
-              f"({n_total} samples)...")
+        print(
+            f"Running full test-set evaluation for aggregate shape summary "
+            f"({n_total} samples)..."
+        )
         agg_metrics, (y_pred_all, y_true_all, y_pers_all) = evaluate(
             model,
             test_loader,
@@ -345,9 +354,11 @@ def run_single(
             freq_means=freq_means,
             return_arrays=True,
         )
-        print(f"Shape_RMSE={agg_metrics['Shape_RMSE']:.4f}  "
-              f"Shape_SS={agg_metrics['Shape_SS']:.4f}  "
-              f"Shape_Mass_Error={agg_metrics['Shape_Mass_Error']:.6f}")
+        print(
+            f"Shape_RMSE={agg_metrics['Shape_RMSE']:.4f}  "
+            f"Shape_SS={agg_metrics['Shape_SS']:.4f}  "
+            f"Shape_Mass_Error={agg_metrics['Shape_Mass_Error']:.6f}"
+        )
         fig = plot_shape_test_set_summary(
             freqs_np,
             y_pred_all.numpy(),

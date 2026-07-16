@@ -1,6 +1,7 @@
 """
 Tests for WaveHeightBaselineNN.infer()'s target-specific behaviour.
 """
+
 import os
 import sys
 
@@ -17,7 +18,7 @@ FREQS = np.array([0.05, 0.10, 0.15, 0.20, 0.30], dtype=np.float32)
 
 class TestShapeInferRenormalization:
     """infer()'s 'shape' branch must rescale every decoded step so its own
-    trapezoidal integral over freqs is exactly 1 (deliverable 1.4)."""
+    trapezoidal integral over freqs is exactly 1"""
 
     def test_infer_shape_output_integrates_to_one(self):
         torch.manual_seed(0)
@@ -28,7 +29,7 @@ class TestShapeInferRenormalization:
         model = WaveHeightBaselineNN(
             freqs=freqs,
             num_freqs=num_freqs,
-            target='shape',
+            target="shape",
             num_channels=1,
             nhead=2,
             num_encoder_layers=1,
@@ -75,7 +76,7 @@ class TestShapeInferRenormalization:
         model = WaveHeightBaselineNN(
             freqs=freqs,
             num_freqs=num_freqs,
-            target='shape',
+            target="shape",
             num_channels=1,
             nhead=2,
             num_encoder_layers=1,

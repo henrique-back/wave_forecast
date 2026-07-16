@@ -8,4 +8,4 @@ from .get_freqs import get_freqs
 from .get_device import get_device, empty_cache
 from .data_processing import data_processing, process_wind
 from .save_progress import save_progress
-from .loss import RMSELoss
+from .loss import RMSELoss, DirectionalLoss
