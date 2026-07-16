@@ -183,12 +183,41 @@ class WaveHeightBaselineNN(nn.Module):
                                       freq_means=freq_means)
         output[:, 0] = start_token
 
+        # freqs may be passed in on a different device (e.g. loaded on CPU
+        # while the model runs on mps/cuda) — move once, outside the loop.
+        freqs_dev = freqs.to(src.device)
+
         for i in range(lead_time):
             # Growing slice, not the full padded tensor: the causal mask
             # already blocks position i from seeing positions > i, so the
             # zero-padded tail beyond i+1 never influenced preds[:, i] — this
             # is just less work to get the same result.
             preds = self.decode(output[:, :i + 1], memory)
-            output[:, i + 1] = preds[:, i]
+            step_pred = preds[:, i]
+
+            if self.target == 'shape':
+                # The decoder isn't architecturally constrained to output a
+                # unit-area spectrum, so enforce it here: rescale by the
+                # step's own trapezoidal integral. This only affects
+                # inference — teacher-forced training still optimises
+                # against the raw decoder output (nn/training_loop.py).
+                #
+                # step_pred has no non-negativity constraint (it's a raw
+                # linear output, especially early in training), so its
+                # integral can legitimately be negative — clamping with a
+                # plain `.clamp(min=eps)` would force any negative mass up
+                # to +eps and blow the rescaled output up by ~1/eps. Only
+                # intervene when the magnitude is genuinely near zero (true
+                # division-by-zero guard), and preserve sign otherwise so a
+                # normal negative-mass step still rescales to exactly 1.
+                step_mass = torch.trapezoid(step_pred, freqs_dev, dim=-1)
+                tiny = step_mass.abs() < 1e-8
+                sign = torch.where(step_mass >= 0,
+                                   torch.ones_like(step_mass),
+                                   -torch.ones_like(step_mass))
+                step_mass = torch.where(tiny, sign * 1e-8, step_mass)
+                step_pred = step_pred / step_mass.unsqueeze(-1)
+
+            output[:, i + 1] = step_pred
 
         return output[:, 1:]

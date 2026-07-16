@@ -147,7 +147,12 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                         f" | Val Tm02_Bias: {val_metrics['Tm02_Bias']:+.4f}"
                         f" | Val Shape_RMSE: {val_metrics['Shape_RMSE']:.4f}"
                         f" (masked: {val_metrics['Shape_masked_samples']})"
+                        f" | Val Shape_SS: {val_metrics['Shape_SS']:.4f}"
                         f" | Val SI_mean: {val_metrics['SI_mean']:.4f}")
+        elif target == 'shape' and 'Shape_RMSE' in val_metrics:
+            bulk_str = (f" | Val Shape_RMSE: {val_metrics['Shape_RMSE']:.4f}"
+                        f" | Val Shape_SS: {val_metrics['Shape_SS']:.4f}"
+                        f" | Val Shape_Mass_Error: {val_metrics['Shape_Mass_Error']:.6f}")
         # Hs_MAPE is only populated for 'hs'/'density' targets (see evaluate.py);
         # 'shape' has no magnitude to compute a MAPE against.
         hs_mape_str = (f"{val_metrics['Hs_MAPE']:.2f}%"
@@ -429,8 +434,13 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
             trial.set_user_attr(f'val_{key}', best_val_metrics[key])
         if target == 'density':
             for key in ['Hs_RMSE', 'Hs_Bias', 'Tm02_RMSE', 'Tm02_Bias',
-                        'Shape_RMSE', 'Shape_masked_samples',
-                        'SI_per_bin', 'SI_mean']:
+                        'Shape_masked_samples', 'SI_per_bin', 'SI_mean']:
+                if key in best_val_metrics:
+                    trial.set_user_attr(f'val_{key}', best_val_metrics[key])
+        if target in ('density', 'shape'):
+            # Shape_RMSE/Shape_SS are computed for both target types (see
+            # nn/evaluate.py); Shape_Mass_Error only for 'shape'.
+            for key in ['Shape_RMSE', 'Shape_SS', 'Shape_Mass_Error']:
                 if key in best_val_metrics:
                     trial.set_user_attr(f'val_{key}', best_val_metrics[key])
 

@@ -7,7 +7,7 @@ from utils import RMSELoss, get_start_token, compute_bulk_params, trapz_weights
 
 
 def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
-             freq_means=None):
+             freq_means=None, return_arrays=False):
     """
     Evaluate model using autoregressive inference.
 
@@ -29,6 +29,12 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                    forwarded to model.infer() → get_start_token() for
                    physically correct Hs persistence baselines.  If None,
                    bulk metrics are skipped entirely.
+    - return_arrays : bool, if True also return the raw
+                   (y_pred_all, y_true_all, y_pers_all) tensors — shape
+                   (total_samples, lead_time, output_dim) — alongside the
+                   metrics dict, as (metrics, arrays). Lets callers (e.g. an
+                   aggregate test-set plot) reuse this function's single
+                   autoregressive inference pass instead of re-running it.
 
     Returns dict with keys:
         'RMSE'               : overall RMSE (all steps, all samples). For
@@ -94,6 +100,9 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                mean across bins — see note below.
         'Shape_masked_samples': int, number of (sample, step) pairs excluded
                                because m₀_target was below the threshold
+        'Shape_SS'           : float, Skill Score of Shape_RMSE vs a
+                               persistence baseline computed the same way
+                               (last observed shape held constant).
 
     Per-frequency-bin Scatter Index:
         'SI_per_bin'         : list[float], length num_freqs; SI[i] =
@@ -105,6 +114,27 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         'SI_mean'            : float, frequency-weighted (trapezoidal) mean of
                                SI_per_bin across all bins; scalar summary for
                                monitoring
+
+    When model.target == 'shape' and freqs is not None, three additional
+    metrics are appended. Unlike the 'density' block above, these do NOT
+    require freq_means (predictions/targets are already the unit-area shape,
+    per nn/prepare_y.py) and are NOT masked by M0_MASK_THRESHOLD — prepare_y
+    discards m₀ for the 'shape' target, so degenerate low-energy spectra
+    can't be identified/excluded here the way the 'density' branch does:
+        'Shape_RMSE'         : float, equal to the top-level 'RMSE' above
+                               (already frequency-weighted shape RMSE) —
+                               exposed under this name so it's directly
+                               comparable to the 'density' target's Shape_RMSE.
+        'Shape_SS'           : float, equal to the top-level 'overall_SS'
+                               above — the shape-space Skill Score vs the
+                               last-observed-shape persistence baseline.
+        'Shape_Mass_Error'   : float, mean absolute deviation of
+                               ∫S_pred(f) df from 1 across all (sample, step)
+                               pairs. Diagnostic only — model.infer() already
+                               renormalizes each predicted step to unit area,
+                               so this should be ~0; a nonzero value here
+                               would indicate infer()'s renormalization isn't
+                               being hit (e.g. a stale checkpoint/code path).
 
     Note on frequency weighting
     ----------------------------
@@ -312,8 +342,19 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                 (((shape_pred - shape_true) ** 2) * freq_w).sum(axis=2)   # (batch, lead_time)
             )
             shape_rmse = float(per_spectrum_rmse[valid].mean())
+
+            # Persistence baseline in the same decoupled-from-magnitude shape
+            # space, for a Shape Skill Score comparable across target types.
+            shape_pers = pers_np / m0_denom
+            per_spectrum_rmse_pers = np.sqrt(
+                (((shape_pers - shape_true) ** 2) * freq_w).sum(axis=2)
+            )
+            shape_rmse_pers = float(per_spectrum_rmse_pers[valid].mean())
+            shape_ss = (1.0 - shape_rmse / shape_rmse_pers
+                        if shape_rmse_pers > 0 else float('nan'))
         else:
             shape_rmse = float('nan')
+            shape_ss = float('nan')
 
         # --- Per-frequency-bin Scatter Index ---
         # Flatten to (N, num_freqs) so each bin's RMSE and mean are computed
@@ -335,11 +376,24 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             'Tm02_Bias'           : float(np.mean(tm02_err)),
             'Shape_RMSE'          : shape_rmse,
             'Shape_masked_samples': n_masked,
+            'Shape_SS'            : shape_ss,
             'SI_per_bin'          : si_per_bin.tolist(),
             'SI_mean'             : si_mean,
         }
 
-    return {
+    if model.target == 'shape' and freqs is not None:
+        freqs_np = freqs.cpu().numpy()
+        # Mass-conservation diagnostic: model.infer() already renormalizes
+        # each predicted step to unit area, so this should be ~0 — see the
+        # 'Shape_Mass_Error' docstring entry above.
+        mass = np.trapezoid(y_pred_all.numpy(), freqs_np, axis=2)  # (batch, lead_time)
+        bulk = {
+            'Shape_RMSE'      : rmse,
+            'Shape_SS'        : overall_ss,
+            'Shape_Mass_Error': float(np.mean(np.abs(mass - 1.0))),
+        }
+
+    metrics = {
         'RMSE'               : rmse,
         'Hs_MAPE'            : hs_mape,
         'Hs_SS'              : hs_ss,
@@ -354,3 +408,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         'overall_SS'         : overall_ss,
         **bulk,
     }
+
+    if return_arrays:
+        return metrics, (y_pred_all, y_true_all, y_pers_all)
+    return metrics

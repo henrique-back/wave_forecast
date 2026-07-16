@@ -24,7 +24,7 @@ import pytest
 # Allow imports from the project root regardless of where pytest is invoked
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from utils.compute_hs import compute_hs_from_density, compute_bulk_params
+from utils.compute_hs import compute_hs_from_density, compute_bulk_params, compute_shape
 
 
 # ---------------------------------------------------------------------------
@@ -183,3 +183,43 @@ class TestBulkParamsRoundTrip:
             "Expected compute_bulk_params on normalised spectrum to produce "
             f"> 2 % Hs error, but got {hs_err:.4%}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Shape normalisation (compute_shape unit-area property)
+# ---------------------------------------------------------------------------
+
+class TestComputeShapeUnitArea:
+    """compute_shape(E, freqs) must integrate to 1 over the frequency grid —
+    the invariant deliverable 1.4 (meeting doc, Meta 1) asks to verify."""
+
+    @pytest.mark.parametrize("Hs, Tp", [
+        (1.0,  8.0),
+        (2.0, 10.0),
+        (4.0, 14.0),
+    ])
+    def test_shape_integrates_to_one(self, Hs, Tp):
+        E = _jonswap(FREQS, Hs, Tp)
+        shape = compute_shape(E[np.newaxis, :], FREQS)
+        integral = np.trapezoid(shape[0], FREQS)
+        assert abs(integral - 1.0) < 1e-4, (
+            f"Hs={Hs}m Tp={Tp}s: shape integral {integral:.6f} != 1"
+        )
+
+    def test_shape_batched_and_multistep_integrates_to_one(self):
+        """Same property holds for the (batch, lead_time, num_freqs) shape
+        used by nn/evaluate.py, not just the 2-D (samples, num_freqs) shape."""
+        E = np.stack([
+            _jonswap(FREQS, 1.5, 9.0),
+            _jonswap(FREQS, 3.0, 12.0),
+        ])[:, np.newaxis, :].repeat(3, axis=1)  # (batch=2, lead_time=3, num_freqs)
+
+        shape = compute_shape(E, FREQS)
+        integrals = np.trapezoid(shape, FREQS, axis=2)  # (batch, lead_time)
+        assert np.allclose(integrals, 1.0, atol=1e-4)
+
+    def test_shape_handles_near_zero_energy(self):
+        """Near-zero-energy input must not produce inf/nan (m0_threshold clip)."""
+        E = np.full((1, len(FREQS)), 1e-20, dtype=np.float32)
+        shape = compute_shape(E, FREQS)
+        assert np.all(np.isfinite(shape))

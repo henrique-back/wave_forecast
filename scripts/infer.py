@@ -21,12 +21,19 @@ results/inference_metrics/{experiment}.json, nested under [target][lead_Nh]
 experiment, so a self-comparison run is no longer needed just to get a
 study's own numbers on file.
 
+--target shape --aggregate runs a full test-set pass and plots mean +/- std
+of S_true(f)/S_pred(f)/S_persistence(f) for one forecast step across every
+test sample, plus prints Shape_RMSE/Shape_SS/Shape_Mass_Error — the aggregate
+counterpart to the per-sample --target shape plots.
+
 Usage:
     python scripts/infer.py --experiment weightedmeanSS_conv_freqemb_v3 --lead 6
     python scripts/infer.py --experiment weightedmeanSS_conv_freqemb_v3 --lead 6 \
         --index 42 --save
     python scripts/infer.py --experiment hs_shape_v5 --target combined --lead 6 \
         --save-metrics
+    python scripts/infer.py --experiment shape_v8 --target shape --lead 6 \
+        --aggregate
 """
 
 import sys
@@ -42,7 +49,7 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 
-from utils import get_freqs, compute_bulk_params, get_start_token, get_device
+from utils import get_freqs, compute_bulk_params, get_start_token, get_device, trapz_weights
 from nn import evaluate
 from nn.checkpoints import find_checkpoint, build_model
 from nn.spectrum_eval import eval_combined, compute_density_metrics
@@ -122,6 +129,20 @@ def parse_args():
         help="Also run a full test-set evaluation (all samples, not just the "
         "inspected ones) and write/update results/inference_metrics/"
         "{experiment}.json with this target/lead's metrics",
+    )
+    p.add_argument(
+        "--aggregate",
+        action="store_true",
+        help="--target shape only: instead of per-sample plots, run a full "
+        "test-set pass and plot mean +/- std of S_true/S_pred/S_persistence "
+        "across every test sample for one forecast step (see --agg-step), "
+        "plus print Shape_RMSE/Shape_SS/Shape_Mass_Error.",
+    )
+    p.add_argument(
+        "--agg-step",
+        type=int,
+        default=0,
+        help="Forecast step (0-indexed) to summarize when --aggregate is set",
     )
     return p.parse_args()
 
@@ -211,6 +232,38 @@ def plot_shape_sample(idx, freqs_np, steps, pred_shape, true_shape, pers_shape):
     return fig
 
 
+def plot_shape_test_set_summary(freqs_np, y_pred_all, y_true_all, y_pers_all, step):
+    """Mean +/- std of S_true/S_pred/S_persistence across the whole test set,
+    for one forecast step — deliverable 1.1's aggregate (not per-sample) view.
+
+    y_pred_all/y_true_all/y_pers_all: (total_samples, lead_time, num_freqs)
+    numpy arrays, as returned by nn.evaluate.evaluate(..., return_arrays=True).
+    """
+    pred = y_pred_all[:, step, :]
+    true = y_true_all[:, step, :]
+    pers = y_pers_all[:, step, :]
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for arr, color, label in [
+        (true, "k", "True"),
+        (pred, "C0", "Predicted"),
+        (pers, "C1", "Persistence"),
+    ]:
+        mean = arr.mean(axis=0)
+        std = arr.std(axis=0)
+        ax.plot(freqs_np, mean, color=color, label=label)
+        ax.fill_between(freqs_np, mean - std, mean + std, color=color, alpha=0.15)
+
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Shape E(f)/m₀ (unit area)")
+    ax.set_title(f"Test-set S_true vs S_pred — step {step + 1} "
+                 f"(mean ± std, n={pred.shape[0]})")
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
 def plot_hs_sample(idx, hs_pred, hs_true, hs_pers):
     lead_time = len(hs_true)
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -279,6 +332,38 @@ def run_single(
     test_dataset = test_loader.dataset
 
     n_total = len(test_dataset)
+
+    if args.aggregate:
+        print(f"Running full test-set evaluation for aggregate shape summary "
+              f"({n_total} samples)...")
+        agg_metrics, (y_pred_all, y_true_all, y_pers_all) = evaluate(
+            model,
+            test_loader,
+            device,
+            freqs,
+            lead_time=lead_time_steps,
+            freq_means=freq_means,
+            return_arrays=True,
+        )
+        print(f"Shape_RMSE={agg_metrics['Shape_RMSE']:.4f}  "
+              f"Shape_SS={agg_metrics['Shape_SS']:.4f}  "
+              f"Shape_Mass_Error={agg_metrics['Shape_Mass_Error']:.6f}")
+        fig = plot_shape_test_set_summary(
+            freqs_np,
+            y_pred_all.numpy(),
+            y_true_all.numpy(),
+            y_pers_all.numpy(),
+            args.agg_step,
+        )
+        if args.save:
+            save_dir = results_folder / "inference_plots"
+            save_dir.mkdir(exist_ok=True)
+            out_path = save_dir / f"shape_test_set_summary_step{args.agg_step}.png"
+            fig.savefig(out_path, dpi=150)
+            print(f"  Saved plot → {out_path}")
+        plt.show()
+        return
+
     indices = select_indices(
         n_total, args.n_samples, args.index, args.random, args.seed
     )
@@ -381,9 +466,16 @@ def run_single(
                 fig = plot_shape_sample(
                     idx, freqs_np, steps, pred_shape, true_shape, pers_shape
                 )
+                # Frequency-weighted (trapezoidal), matching the training
+                # loss/nn.evaluate.py convention since the v7->v8 bump —
+                # not a flat mean over the log-spaced frequency grid.
+                freq_w = trapz_weights(freqs_np)
+                shape_rmse_per_step = np.sqrt(
+                    (((pred_shape - true_shape) ** 2) * freq_w).sum(axis=1)
+                )
                 print(
-                    f"\nSample {idx}: shape RMSE per step = "
-                    f"{np.sqrt(((pred_shape - true_shape) ** 2).mean(axis=1))}"
+                    f"\nSample {idx}: shape RMSE per step (freq-weighted) = "
+                    f"{shape_rmse_per_step}"
                 )
 
             else:  # hs
@@ -567,10 +659,11 @@ def run_combined(
             )
             tm02_pred, tm02_true = tm02_pred[0], tm02_true[0]
 
-            # Sanity check: the shape model's own output isn't constrained to
-            # integrate to exactly 1, so hs_pred_combined (derived from the
-            # recombined spectrum) can drift from hs_pred_np (the hs model's
-            # direct forecast) — printing both surfaces that calibration gap.
+            # Sanity check: model.infer() renormalizes each predicted shape
+            # step to unit area, so this should print ~1.000 for every step.
+            # A drift here would mean the renormalization in
+            # nn/transformer.py::infer() isn't being hit (e.g. a stale
+            # checkpoint loaded against new code).
             shape_m0 = np.trapezoid(shape_pred_np, freqs_np, axis=1)
             print(f"\nSample t0={t0} (idx_hs={idx_hs}, idx_shape={idx_shape}):")
             print(
@@ -618,6 +711,8 @@ def run_combined(
 
 def main():
     args = parse_args()
+    if args.aggregate and args.target != "shape":
+        raise ValueError("--aggregate is only supported with --target shape")
     project_root = Path(__file__).resolve().parent.parent
 
     file_path = project_root / "buoy_data" / BUOY_ID / "processed_data.pkl"

@@ -219,7 +219,6 @@ for lead_time_hours in lead_times_hours:
                 "val_Hs_Bias",
                 "val_Tm02_RMSE",
                 "val_Tm02_Bias",
-                "val_Shape_RMSE",
                 "val_Shape_masked_samples",
                 "val_SI_mean",
             ]:
@@ -227,6 +226,12 @@ for lead_time_hours in lead_times_hours:
                     f.write(f"{key}: {attrs[key]}\n")
             if "val_SI_per_bin" in attrs:
                 f.write(f"val_SI_per_bin: {attrs['val_SI_per_bin']}\n")
+        if target in ("density", "shape"):
+            # Shape_RMSE/Shape_SS are computed for both target types (see
+            # nn/evaluate.py); Shape_Mass_Error only for 'shape'.
+            for key in ["val_Shape_RMSE", "val_Shape_SS", "val_Shape_Mass_Error"]:
+                if key in attrs:
+                    f.write(f"{key}: {attrs[key]}\n")
 
     print(f"Results saved to {result_file}")
 
