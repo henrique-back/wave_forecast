@@ -42,7 +42,7 @@ EXPERIMENT_NAME = "wind_combined_v7"
 BUOY_ID = '42056'
 
 target = "hs"
-lead_times_hours = [12]
+lead_times_hours = [24]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
@@ -54,7 +54,7 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
 # retrained model is selected the same way the search selected it.
-OBJECTIVE_METRIC = "weighted_mean_SS"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
 
 # Seeds to retrain with. A single seed trains one final model. Add more to
 # get a mean±std noise estimate across independent weight initializations and
