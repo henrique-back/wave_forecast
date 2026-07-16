@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from torchmetrics.functional import pearson_corrcoef
-from utils import RMSELoss, get_start_token, compute_bulk_params
+from utils import RMSELoss, get_start_token, compute_bulk_params, trapz_weights
 
 
 def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
@@ -31,7 +31,11 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                    bulk metrics are skipped entirely.
 
     Returns dict with keys:
-        'RMSE'               : overall RMSE (all steps, all samples flattened)
+        'RMSE'               : overall RMSE (all steps, all samples). For
+                               'density'/'shape' targets this is a
+                               frequency-weighted (trapezoidal) RMSE across
+                               the frequency axis — see note below; 'hs' has
+                               no frequency axis and is unaffected.
         'Hs_MAPE'            : MAPE (%) of Hs = 4√m₀, predicted vs target,
                                always in physical metres. For target == 'hs'
                                this is computed directly on y_pred/y_true
@@ -44,9 +48,12 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                Comparable to the "accuracy = 100% - MAPE"
                                metric reported in Hs-forecasting literature
                                (e.g. Minuzzi & Farina 2023, Londe & Panchang).
-        'CC'                 : Pearson correlation (flattened)
-        'Bias'               : mean error = mean(pred - true), flattened
-        'R2'                 : coefficient of determination, flattened
+        'CC'                 : Pearson correlation (frequency-weighted for
+                               'density'/'shape' — see note below)
+        'Bias'               : mean error = mean(pred - true) (frequency-
+                               weighted for 'density'/'shape')
+        'R2'                 : coefficient of determination (frequency-
+                               weighted for 'density'/'shape')
         'per_step_RMSE'      : list[float], one RMSE per forecast step
         'per_step_SS'        : list[float], Skill Score vs persistence per step
                                SS = 1 - RMSE_model / RMSE_persistence
@@ -55,7 +62,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                SS < 0: persistence is better
         'per_step_Bias'      : list[float], mean error per forecast step
         'per_step_R2'        : list[float], R² per forecast step
-        'overall_SS'         : float, Skill Score computed on overall flattened RMSE
+        'overall_SS'         : float, Skill Score computed on overall RMSE
 
     Always present:
         'Hs_SS'              : float, Skill Score for significant wave height.
@@ -82,7 +89,9 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         'Shape_RMSE'         : float, mean per-spectrum RMSE of E(f)/m₀_target
                                (averaged over valid spectra, i.e. m₀_target ≥
                                M0_MASK_THRESHOLD; isolates shape errors from
-                               energy magnitude errors)
+                               energy magnitude errors). The per-spectrum RMSE
+                               itself is a frequency-weighted (trapezoidal)
+                               mean across bins — see note below.
         'Shape_masked_samples': int, number of (sample, step) pairs excluded
                                because m₀_target was below the threshold
 
@@ -93,8 +102,24 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                (sample × step) pairs flattened together;
                                reveals which parts of the spectrum are hardest
                                to forecast
-        'SI_mean'            : float, mean of SI_per_bin across all bins;
-                               scalar summary for monitoring
+        'SI_mean'            : float, frequency-weighted (trapezoidal) mean of
+                               SI_per_bin across all bins; scalar summary for
+                               monitoring
+
+    Note on frequency weighting
+    ----------------------------
+    The frequency grid is log-spaced (dense near 0.02 Hz, coarse near
+    0.485 Hz). 'SI_per_bin' is a per-bin statistic (no aggregation across
+    frequency), so bin width is irrelevant there. Every other metric that
+    collapses the frequency axis for a 'density'/'shape' target — 'RMSE',
+    'CC', 'Bias', 'R2', 'overall_SS', the per_step_* variants, 'Shape_RMSE',
+    and 'SI_mean' — uses utils.trapz_weights(freqs) instead of a plain
+    arithmetic mean over bins, so the dense low-frequency region isn't
+    over-represented relative to its actual share of the physical spectrum.
+    This is the same weighting the training loss uses (nn/training_loop.py),
+    so validation-time early stopping / LR scheduling / Optuna's 'RMSE'
+    objective are consistent with what the model is actually optimizing.
+    'hs' has no frequency axis (output_dim=1) and is unaffected throughout.
 
     Note on optimization equivalence
     ---------------------------------
@@ -115,6 +140,41 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     all_targets = []
     all_persistence = []
     rmse_fn = RMSELoss()
+
+    # Frequency-weighted (trapezoidal) evaluation, matching the training loss
+    # (nn/training_loop.py) and Shape_RMSE/SI_mean below. 'hs' has no
+    # frequency axis (output_dim=1) so it's left unweighted.
+    freq_weights = None
+    if model.target != 'hs' and freqs is not None:
+        freq_weights = torch.from_numpy(
+            trapz_weights(freqs.cpu().numpy())
+        ).to(dtype=torch.float32)
+
+    def _weighted_bias(pred, true):
+        diff = pred - true
+        val = diff.mean() if freq_weights is None else (diff * freq_weights).sum(dim=-1).mean()
+        return val.item()
+
+    def _weighted_r2(pred, true):
+        if freq_weights is None:
+            ss_res = ((true - pred) ** 2).sum()
+            ss_tot = ((true - true.mean()) ** 2).sum()
+        else:
+            true_wmean = (true * freq_weights).sum(dim=-1).mean()
+            ss_res = (((true - pred) ** 2) * freq_weights).sum()
+            ss_tot = (((true - true_wmean) ** 2) * freq_weights).sum()
+        return (1.0 - ss_res / ss_tot).item() if ss_tot > 0 else float('nan')
+
+    def _weighted_cc(pred, true):
+        if freq_weights is None:
+            return pearson_corrcoef(pred.flatten(), true.flatten()).item()
+        p_wmean = (pred * freq_weights).sum(dim=-1).mean()
+        t_wmean = (true * freq_weights).sum(dim=-1).mean()
+        pc, tc = pred - p_wmean, true - t_wmean
+        cov   = ((pc * tc) * freq_weights).sum(dim=-1).mean()
+        var_p = ((pc ** 2) * freq_weights).sum(dim=-1).mean()
+        var_t = ((tc ** 2) * freq_weights).sum(dim=-1).mean()
+        return (cov / torch.sqrt(var_p * var_t)).item()
 
     with torch.no_grad():
         for src, aux, y_batch in tqdm(dataloader):
@@ -152,17 +212,17 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     per_step_r2   = []
 
     for step in range(y_pred_all.shape[1]):
-        pred_s = y_pred_all[:, step, :].flatten()
-        true_s = y_true_all[:, step, :].flatten()
-        pers_s = y_pers_all[:, step, :].flatten()
+        # Not flattened away: keep the trailing frequency axis intact so
+        # freq_weights can broadcast against it inside rmse_fn/_weighted_*.
+        pred_s = y_pred_all[:, step, :]
+        true_s = y_true_all[:, step, :]
+        pers_s = y_pers_all[:, step, :]
 
-        rmse_s = rmse_fn(pred_s, true_s).item()
-        rmse_p = rmse_fn(pers_s, true_s).item()
+        rmse_s = rmse_fn(pred_s, true_s, weights=freq_weights).item()
+        rmse_p = rmse_fn(pers_s, true_s, weights=freq_weights).item()
         ss_s   = 1.0 - rmse_s / rmse_p if rmse_p > 0 else float('nan')
-        bias_s = (pred_s - true_s).mean().item()
-        ss_res = ((true_s - pred_s) ** 2).sum()
-        ss_tot = ((true_s - true_s.mean()) ** 2).sum()
-        r2_s   = (1.0 - ss_res / ss_tot).item() if ss_tot > 0 else float('nan')
+        bias_s = _weighted_bias(pred_s, true_s)
+        r2_s   = _weighted_r2(pred_s, true_s)
 
         per_step_rmse.append(rmse_s)
         per_step_rmse_pers.append(rmse_p)
@@ -170,29 +230,25 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         per_step_bias.append(bias_s)
         per_step_r2.append(r2_s)
 
-    # Overall (flattened) metrics
-    y_pred_flat = y_pred_all.flatten()
-    y_true_flat = y_true_all.flatten()
-    y_pers_flat = y_pers_all.flatten()
-
-    rmse       = rmse_fn(y_pred_flat, y_true_flat).item()
-    rmse_pers  = rmse_fn(y_pers_flat, y_true_flat).item()
-    cc         = pearson_corrcoef(y_pred_flat, y_true_flat).item()
+    # Overall metrics — kept as (total_samples, lead_time, output_dim) rather
+    # than flattened, so freq_weights broadcasts against the trailing
+    # frequency axis inside rmse_fn/_weighted_*.
+    rmse       = rmse_fn(y_pred_all, y_true_all, weights=freq_weights).item()
+    rmse_pers  = rmse_fn(y_pers_all, y_true_all, weights=freq_weights).item()
+    cc         = _weighted_cc(y_pred_all, y_true_all)
     overall_ss = 1.0 - rmse / rmse_pers if rmse_pers > 0 else float('nan')
     # For hs target y_pred/y_true are physical Hs, so overall_SS == Hs_SS exactly.
     # For density target this is overwritten below using denormalised Hs.
     hs_ss = overall_ss
-    bias       = (y_pred_flat - y_true_flat).mean().item()
-    ss_res     = ((y_true_flat - y_pred_flat) ** 2).sum()
-    ss_tot     = ((y_true_flat - y_true_flat.mean()) ** 2).sum()
-    r2         = (1.0 - ss_res / ss_tot).item() if ss_tot > 0 else float('nan')
+    bias       = _weighted_bias(y_pred_all, y_true_all)
+    r2         = _weighted_r2(y_pred_all, y_true_all)
 
     # Hs_MAPE: for target == 'hs', y_pred/y_true ARE physical Hs already
     # (prepare_y computes compute_hs on the raw, non-normalised density
     # before any scaling is applied). For target == 'density' this is
     # overwritten below once Hs is derived from the denormalised spectrum.
     hs_mape = float(100.0 * torch.mean(
-        torch.abs(y_pred_flat - y_true_flat) / torch.abs(y_true_flat)
+        torch.abs(y_pred_all - y_true_all) / torch.abs(y_true_all)
     ).item()) if model.target == 'hs' else None
 
     # Density-target-only metrics — bulk parameters, spectral shape, and SI.
@@ -210,6 +266,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     if model.target == 'density' and freqs is not None and freq_means is not None:
         freqs_np = freqs.cpu().numpy()                        # (num_freqs,)
         fm_np    = freq_means.cpu().numpy()                   # (num_freqs,)
+        freq_w   = trapz_weights(freqs_np)                    # (num_freqs,), sums to 1
 
         # Denormalise: E_phys = Ẽ * μ(f);  shape (batch, lead_time, num_freqs)
         pred_np = y_pred_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
@@ -249,8 +306,10 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             shape_pred = pred_np / m0_denom   # (batch, lead_time, num_freqs)
             shape_true = true_np / m0_denom
 
+            # Frequency-weighted (trapezoidal) mean squared error across bins,
+            # not a plain arithmetic mean — see "Note on frequency weighting".
             per_spectrum_rmse = np.sqrt(
-                ((shape_pred - shape_true) ** 2).mean(axis=2)   # (batch, lead_time)
+                (((shape_pred - shape_true) ** 2) * freq_w).sum(axis=2)   # (batch, lead_time)
             )
             shape_rmse = float(per_spectrum_rmse[valid].mean())
         else:
@@ -265,6 +324,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         rmse_per_bin = np.sqrt(((flat_pred - flat_true) ** 2).mean(axis=0))  # (num_freqs,)
         mean_per_bin = flat_true.mean(axis=0).clip(min=1e-12)                # (num_freqs,)
         si_per_bin   = rmse_per_bin / mean_per_bin                           # (num_freqs,)
+        si_mean      = float((si_per_bin * freq_w).sum())   # frequency-weighted, not flat mean
 
         bulk = {
             'Hs_RMSE'             : hs_rmse_model,
@@ -276,7 +336,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             'Shape_RMSE'          : shape_rmse,
             'Shape_masked_samples': n_masked,
             'SI_per_bin'          : si_per_bin.tolist(),
-            'SI_mean'             : float(si_per_bin.mean()),
+            'SI_mean'             : si_mean,
         }
 
     return {

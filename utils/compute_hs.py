@@ -59,6 +59,35 @@ def compute_bulk_params(density_batch, freqs):
     return hs, tm02
 
 
+def trapz_weights(freqs):
+    """
+    Per-bin trapezoidal integration weights for a frequency grid, normalised
+    to sum to 1.
+
+    The buoy's frequency grid is log-spaced (dense near 0.02 Hz, coarse near
+    0.485 Hz), so a plain arithmetic mean over bins over-represents the
+    low-frequency region relative to its actual contribution to a physical
+    integral. weights * values summed approximates
+    ∫ f(x) dx / (freqs[-1] - freqs[0]) — i.e. a frequency-weighted mean
+    consistent with the trapezoidal rule used elsewhere (compute_bulk_params,
+    compute_shape) for spectral moments.
+
+    Parameters
+    ----------
+    freqs : np.ndarray, shape (num_freqs,)
+
+    Returns
+    -------
+    weights : np.ndarray, shape (num_freqs,), sums to 1.
+    """
+    freqs = np.asarray(freqs, dtype=float)
+    w = np.empty_like(freqs)
+    w[0] = (freqs[1] - freqs[0]) / 2
+    w[-1] = (freqs[-1] - freqs[-2]) / 2
+    w[1:-1] = (freqs[2:] - freqs[:-2]) / 2
+    return w / w.sum()
+
+
 def compute_shape(density_batch, freqs, m0_threshold=1e-12):
     """
     Normalize a batch of spectra to unit-area shape: shape(f) = E(f) / m0.

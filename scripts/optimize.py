@@ -23,14 +23,21 @@ set_seed(42)
 # changes in a way that makes old trials incomparable.  A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model.
-STUDY_VERSION = "v7"
+#
+# Bumped v7 -> v8: RMSE (both the training loss for 'density'/'shape'
+# targets, RMSELoss in utils/loss.py, and the RMSE/CC/Bias/R2/SS family in
+# nn/evaluate.py + nn/spectrum_eval.py) is now frequency-weighted via
+# utils.trapz_weights instead of a flat mean over the log-spaced frequency
+# grid. This changes both what the model optimizes for and how trials are
+# scored, so v7 trials are not comparable to v8 trials.
+STUDY_VERSION = "v8"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "wind_combined_v7"
+EXPERIMENT_NAME = "wind_combined_v8"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (

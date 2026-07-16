@@ -9,7 +9,7 @@ implementation instead of drifting apart.
 import numpy as np
 import torch
 
-from utils import get_start_token, compute_bulk_params
+from utils import get_start_token, compute_bulk_params, trapz_weights
 from nn.checkpoints import find_checkpoint, build_model
 from nn.optimization import _prepare_dataloaders
 
@@ -141,29 +141,58 @@ def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
     operating on physical numpy arrays of shape (N, lead_time, num_freqs)
     instead of a live model + dataloader, so it applies identically whether
     the arrays came from a single density model or a recombined hs+shape pair.
+
+    All frequency-axis-collapsing metrics ('RMSE', 'CC', 'Bias', 'R2' and
+    per_step_* variants, plus 'Shape_RMSE'/'SI_mean' below) use
+    utils.trapz_weights(freqs_np) rather than a plain arithmetic mean over
+    bins — the grid is log-spaced (dense near 0.02 Hz, coarse near 0.485 Hz),
+    so an unweighted mean over-represents the low-frequency region relative
+    to its actual share of the physical spectrum. This matches the
+    frequency-weighted training loss and nn/evaluate.py.
     """
+    freq_w = trapz_weights(freqs_np)   # (num_freqs,), sums to 1
+
     def rmse(a, b):
-        return float(np.sqrt(np.mean((a - b) ** 2)))
+        sq = (a - b) ** 2
+        return float(np.sqrt((sq * freq_w).sum(axis=-1).mean()))
+
+    def bias(a, b):
+        diff = a - b
+        return float((diff * freq_w).sum(axis=-1).mean())
+
+    def r2(pred, true):
+        true_wmean = (true * freq_w).sum(axis=-1).mean()
+        ss_res = (((true - pred) ** 2) * freq_w).sum()
+        ss_tot = (((true - true_wmean) ** 2) * freq_w).sum()
+        return float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float('nan')
+
+    def cc(pred, true):
+        p_wmean = (pred * freq_w).sum(axis=-1).mean()
+        t_wmean = (true * freq_w).sum(axis=-1).mean()
+        pc, tc = pred - p_wmean, true - t_wmean
+        cov   = ((pc * tc) * freq_w).sum(axis=-1).mean()
+        var_p = ((pc ** 2) * freq_w).sum(axis=-1).mean()
+        var_t = ((tc ** 2) * freq_w).sum(axis=-1).mean()
+        return float(cov / np.sqrt(var_p * var_t))
 
     per_step_rmse, per_step_rmse_pers, per_step_ss, per_step_bias, per_step_r2 = [], [], [], [], []
     for step in range(pred_np.shape[1]):
-        p, t, pe = pred_np[:, step, :].flatten(), true_np[:, step, :].flatten(), pers_np[:, step, :].flatten()
+        # Frequency axis kept intact (not flattened) so freq_w broadcasts
+        # against it inside rmse/bias/r2/cc.
+        p, t, pe = pred_np[:, step, :], true_np[:, step, :], pers_np[:, step, :]
         r_s, r_p = rmse(p, t), rmse(pe, t)
         per_step_rmse.append(r_s)
         per_step_rmse_pers.append(r_p)
         per_step_ss.append(1.0 - r_s / r_p if r_p > 0 else float('nan'))
-        per_step_bias.append(float(np.mean(p - t)))
-        ss_res, ss_tot = np.sum((t - p) ** 2), np.sum((t - t.mean()) ** 2)
-        per_step_r2.append(float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float('nan'))
+        per_step_bias.append(bias(p, t))
+        per_step_r2.append(r2(p, t))
 
-    pred_flat, true_flat, pers_flat = pred_np.flatten(), true_np.flatten(), pers_np.flatten()
-    overall_rmse = rmse(pred_flat, true_flat)
-    overall_rmse_pers = rmse(pers_flat, true_flat)
+    overall_rmse = rmse(pred_np, true_np)
+    overall_rmse_pers = rmse(pers_np, true_np)
     overall_ss = 1.0 - overall_rmse / overall_rmse_pers if overall_rmse_pers > 0 else float('nan')
-    cc = float(np.corrcoef(pred_flat, true_flat)[0, 1])
-    bias = float(np.mean(pred_flat - true_flat))
-    ss_res, ss_tot = np.sum((true_flat - pred_flat) ** 2), np.sum((true_flat - true_flat.mean()) ** 2)
-    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float('nan')
+    overall_cc = cc(pred_np, true_np)
+    overall_bias = bias(pred_np, true_np)
+    overall_r2 = r2(pred_np, true_np)
 
     hs_pred, tm02_pred = compute_bulk_params(pred_np, freqs_np)
     hs_true, tm02_true = compute_bulk_params(true_np, freqs_np)
@@ -182,7 +211,7 @@ def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
     n_masked = int((~valid).sum())
     m0_denom = np.where(valid, m0_true, 1.0)[:, :, np.newaxis]
     shape_pred_norm, shape_true_norm = pred_np / m0_denom, true_np / m0_denom
-    per_spectrum_rmse = np.sqrt(((shape_pred_norm - shape_true_norm) ** 2).mean(axis=2))
+    per_spectrum_rmse = np.sqrt((((shape_pred_norm - shape_true_norm) ** 2) * freq_w).sum(axis=2))
     shape_rmse = float(per_spectrum_rmse[valid].mean()) if valid.any() else float('nan')
 
     flat_pred = pred_np.reshape(-1, pred_np.shape[2])
@@ -193,7 +222,7 @@ def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
 
     return {
         'n_samples': int(pred_np.shape[0]),
-        'RMSE': overall_rmse, 'CC': cc, 'Bias': bias, 'R2': r2,
+        'RMSE': overall_rmse, 'CC': overall_cc, 'Bias': overall_bias, 'R2': overall_r2,
         'per_step_RMSE': per_step_rmse, 'per_step_RMSE_pers': per_step_rmse_pers,
         'per_step_SS': per_step_ss, 'per_step_Bias': per_step_bias, 'per_step_R2': per_step_r2,
         'overall_SS': overall_ss,
@@ -202,5 +231,5 @@ def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
         'per_step_Hs_RMSE': per_step_hs_rmse, 'per_step_Hs_RMSE_pers': per_step_hs_rmse_pers,
         'Tm02_RMSE': float(np.sqrt(np.mean(tm02_err ** 2))), 'Tm02_Bias': float(np.mean(tm02_err)),
         'Shape_RMSE': shape_rmse, 'Shape_masked_samples': n_masked,
-        'SI_per_bin': si_per_bin.tolist(), 'SI_mean': float(si_per_bin.mean()),
+        'SI_per_bin': si_per_bin.tolist(), 'SI_mean': float((si_per_bin * freq_w).sum()),
     }

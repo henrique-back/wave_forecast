@@ -1,4 +1,4 @@
-from utils import get_start_token, RMSELoss
+from utils import get_start_token, RMSELoss, trapz_weights
 import torch
 from tqdm import tqdm
 
@@ -18,10 +18,23 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
           loss = RMSE(ŷ * μ(f), y * μ(f)).  This prevents the loss from
           being dominated by the normalisation artefact.
         If None, falls back to normalised-space loss (old behaviour).
+
+    For 'density'/'shape' targets, the loss is additionally weighted across
+    the frequency axis by utils.trapz_weights(freqs) — the grid is
+    log-spaced (dense near 0.02 Hz, coarse near 0.485 Hz), so a flat
+    elementwise MSE over-weights the dense low-frequency region relative to
+    its actual share of the physical spectrum. 'hs' has no frequency axis
+    (output_dim=1) so it's unaffected.
     """
     model.train()
     total_loss = 0.0
     loss_fn = RMSELoss()
+
+    freq_weights = None
+    if model.target in ('density', 'shape') and freqs is not None:
+        freq_weights = torch.from_numpy(
+            trapz_weights(freqs.cpu().numpy())
+        ).to(device=device, dtype=torch.float32)
 
     loop = tqdm(dataloader, desc='Training', leave=False)
 
@@ -77,9 +90,9 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         # are already in physical metres (see prepare_y and get_start_token).
         if model.target == 'density' and freq_means is not None:
             fm = freq_means.to(device)          # (num_freqs,)
-            loss = loss_fn(y_pred * fm, y_batch * fm)
+            loss = loss_fn(y_pred * fm, y_batch * fm, weights=freq_weights)
         else:
-            loss = loss_fn(y_pred, y_batch)
+            loss = loss_fn(y_pred, y_batch, weights=freq_weights)
 
         optimizer.zero_grad()
         loss.backward()
