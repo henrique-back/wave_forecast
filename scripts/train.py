@@ -38,16 +38,18 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
-EXPERIMENT_NAME = "wind_combined_v7"
-BUOY_ID = '42056'
+# v9: matches optimize.py's STUDY_VERSION bump for the freq-axis conv
+# padding fix — run optimize.py first to produce shape_v9's best_trial.txt.
+EXPERIMENT_NAME = "shape_v9"
+BUOY_ID = '32012'
 
-target = "hs"
+target = "shape"
 lead_times_hours = [24]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
 CHANNEL_SET = "full"
-AUX_SET = "wind"
+AUX_SET = "none"
 assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 

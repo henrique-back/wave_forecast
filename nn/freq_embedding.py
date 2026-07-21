@@ -105,7 +105,13 @@ class FreqDimEmbedding(nn.Module):
         )
         self.freq_pos_residual = nn.Parameter(torch.zeros(num_freqs, freq_embed_dim))
 
-        self.freq_conv = TemporalConvFrontend(freq_embed_dim, dropout=dropout)
+        # 'replicate' padding: the frequency axis is bounded and non-cyclic,
+        # so edge bins should repeat their real value instead of the zero
+        # padding TemporalConvFrontend defaults to for the time axis — zero
+        # padding here would fabricate fake zero-energy bins just outside the
+        # 0.02-0.485 Hz grid and corrupt the ~7 bins nearest each edge.
+        self.freq_conv = TemporalConvFrontend(freq_embed_dim, dropout=dropout,
+                                              padding_mode='replicate')
         self.attn_pool = _FreqAttentionPool(freq_embed_dim, embed_dim)
 
     def forward(self, x):

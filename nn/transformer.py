@@ -109,7 +109,21 @@ class WaveHeightBaselineNN(nn.Module):
 
         # Output layer — predict either 1 value (hs) or num_freqs (density)
         output_dim = 1 if self.target == 'hs' else num_freqs
-        self.predictor = nn.Linear(embed_dim, output_dim)
+        if self.target == 'hs':
+            self.predictor = nn.Linear(embed_dim, output_dim)
+        else:
+            # density/shape predict a physical spectral energy density,
+            # which is never negative (Hs = 4*sqrt(m0) requires m0 >= 0). A
+            # plain Linear has no such constraint, so the model is only ever
+            # discouraged from negative energy by the loss, never
+            # prevented — Softplus makes it architecturally impossible.
+            # Smooth and non-zero everywhere (unlike ReLU), so bins that
+            # should carry near-zero energy still get a live gradient
+            # instead of dying at exactly zero.
+            self.predictor = nn.Sequential(
+                nn.Linear(embed_dim, output_dim),
+                nn.Softplus(),
+            )
 
 
     def encode(self, src, aux=None):
@@ -197,25 +211,41 @@ class WaveHeightBaselineNN(nn.Module):
 
             if self.target == 'shape':
                 # The decoder isn't architecturally constrained to output a
-                # unit-area spectrum, so enforce it here: rescale by the
-                # step's own trapezoidal integral. This only affects
-                # inference — teacher-forced training still optimises
-                # against the raw decoder output (nn/training_loop.py).
+                # non-negative, unit-area spectrum, so enforce both here.
+                # This only affects inference — teacher-forced training
+                # still optimises against the raw decoder output
+                # (nn/training_loop.py).
                 #
-                # step_pred has no non-negativity constraint (it's a raw
-                # linear output, especially early in training), so its
-                # integral can legitimately be negative — clamping with a
-                # plain `.clamp(min=eps)` would force any negative mass up
-                # to +eps and blow the rescaled output up by ~1/eps. Only
-                # intervene when the magnitude is genuinely near zero (true
-                # division-by-zero guard), and preserve sign otherwise so a
-                # normal negative-mass step still rescales to exactly 1.
+                # Clamp to non-negative BEFORE integrating: a raw linear
+                # output can have negative bins, and dividing by the *signed*
+                # integral (as a previous version of this code did) lets
+                # negative bins eat into the total mass, inflating the
+                # rescale factor applied to every bin — including the
+                # correctly-signed positive ones — so the whole spectrum's
+                # shape gets distorted, not just the negative bins. Clamping
+                # first means the mass reflects only real (positive)
+                # content, and the negative bins are simply dropped rather
+                # than allowed to cancel against positive ones.
+                step_pred = step_pred.clamp(min=0.0)
                 step_mass = torch.trapezoid(step_pred, freqs_dev, dim=-1)
-                tiny = step_mass.abs() < 1e-8
-                sign = torch.where(step_mass >= 0,
-                                   torch.ones_like(step_mass),
-                                   -torch.ones_like(step_mass))
-                step_mass = torch.where(tiny, sign * 1e-8, step_mass)
+
+                # Degenerate case: every bin was negative pre-clamp, so
+                # step_pred is now all zeros and there's no clamped mass to
+                # rescale by. Falling back to the discarded negative values
+                # (as a previous version did, dividing by their own negative
+                # mass) would just reintroduce the sign-cancellation this
+                # clamp exists to remove. Fall back to a flat distribution
+                # instead — trapz of a constant c over [freqs[0], freqs[-1]]
+                # is exactly c * (freqs[-1] - freqs[0]) regardless of the
+                # grid's (non-uniform) spacing, so this exactly integrates to
+                # 1 and makes no claim about spectral shape.
+                tiny = step_mass < 1e-8
+                if tiny.any():
+                    flat_value = 1.0 / (freqs_dev[-1] - freqs_dev[0])
+                    flat = torch.full_like(step_pred, flat_value)
+                    step_pred = torch.where(tiny.unsqueeze(-1), flat, step_pred)
+                    step_mass = torch.where(tiny, torch.ones_like(step_mass), step_mass)
+
                 step_pred = step_pred / step_mass.unsqueeze(-1)
 
             output[:, i + 1] = step_pred

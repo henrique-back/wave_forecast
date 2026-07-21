@@ -30,14 +30,22 @@ set_seed(42)
 # utils.trapz_weights instead of a flat mean over the log-spaced frequency
 # grid. This changes both what the model optimizes for and how trials are
 # scored, so v7 trials are not comparable to v8 trials.
-STUDY_VERSION = "v8"
+#
+# v9: FreqDimEmbedding's frequency-axis conv (nn/freq_embedding.py's
+# freq_conv, reusing TemporalConvFrontend) switched from zero-padding to
+# replicate-padding at the grid boundary. Zero-padding fabricated fake
+# zero-energy bins just outside 0.02-0.485 Hz and corrupted the ~7 bins
+# nearest each edge (visible as a spurious low-frequency bump/negative dip
+# in shape_v8's test-set predictions) — an architecture change, so v8 trials
+# (optuna_study_v8.db) are not comparable to v9 trials either.
+STUDY_VERSION = "v9"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "shape_v8"
+EXPERIMENT_NAME = "shape_v9"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -83,9 +91,9 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
 
 # Process data
-buoy_number = "32012"
+BUOY_ID = "32012"
 project_root = Path(__file__).resolve().parent.parent
-folder_path = project_root / "buoy_data" / buoy_number
+folder_path = project_root / "buoy_data" / BUOY_ID
 file_path = folder_path / "processed_data.pkl"
 
 # Load from file if it exists

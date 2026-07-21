@@ -20,13 +20,21 @@ class TemporalConvFrontend(nn.Module):
     causal mask.
 
     Args:
-        embed_dim : dimension of the token sequence (= head_dim × nhead)
-        dropout   : dropout probability applied after each conv activation
+        embed_dim    : dimension of the token sequence (= head_dim × nhead)
+        dropout      : dropout probability applied after each conv activation
+        padding_mode : passed straight to nn.Conv1d. Default 'zeros' fits the
+                       time axis (nothing observed before the window is a
+                       reasonable fiction). Callers reusing this module along
+                       a bounded, non-cyclic axis instead — e.g.
+                       FreqDimEmbedding smoothing across frequency bins —
+                       should pass 'replicate' so the edge bins repeat rather
+                       than fabricating zero energy just outside the grid.
     """
 
     _DILATIONS = (1, 2, 4)
 
-    def __init__(self, embed_dim: int, dropout: float = 0.1):
+    def __init__(self, embed_dim: int, dropout: float = 0.1,
+                 padding_mode: str = 'zeros'):
         super().__init__()
         self.layers = nn.ModuleList()
         for d in self._DILATIONS:
@@ -35,7 +43,8 @@ class TemporalConvFrontend(nn.Module):
             self.layers.append(nn.ModuleDict({
                 'norm': nn.LayerNorm(embed_dim),
                 'conv': nn.Conv1d(embed_dim, embed_dim,
-                                  kernel_size=3, dilation=d, padding=d),
+                                  kernel_size=3, dilation=d, padding=d,
+                                  padding_mode=padding_mode),
             }))
         self.act     = nn.GELU()
         self.dropout = nn.Dropout(dropout)
