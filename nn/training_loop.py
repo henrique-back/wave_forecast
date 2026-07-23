@@ -57,10 +57,19 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
             tgt[:, 1:, :] = y_batch[:, :-1, :]
             y_pred = model(src, tgt, aux=aux)
         else:
-            # Scheduled sampling: at each step, feed the ground-truth previous
-            # token with probability tf_ratio, and the model's own previous
-            # prediction with probability (1 - tf_ratio).  This closes the gap
-            # between teacher-forced training and autoregressive evaluation.
+            # Scheduled sampling: for each sample in the batch independently,
+            # feed the ground-truth previous token with probability tf_ratio,
+            # and the model's own previous prediction with probability
+            # (1 - tf_ratio). This closes the gap between teacher-forced
+            # training and autoregressive evaluation.
+            #
+            # The choice is drawn per-sample (not once for the whole batch)
+            # so that, on average, every batch/epoch sees a mix of teacher-
+            # forced and self-generated context close to the target tf_ratio.
+            # A single batch-wide draw would instead make whole batches
+            # uniformly "easy" (teacher-forced) or "hard" (autoregressive,
+            # error-compounding) purely by chance, injecting a lot of
+            # spurious epoch-to-epoch variance into the training signal.
             lead_time = y_batch.shape[1]
             # src never changes across decode steps — encode it once and
             # reuse across the loop instead of re-running the encoder at
@@ -75,10 +84,10 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
                 all_preds.append(pred_t)
 
                 if t < lead_time - 1:
-                    if torch.rand(1).item() < tf_ratio:
-                        next_input = y_batch[:, t:t+1, :]   # teacher token
-                    else:
-                        next_input = pred_t.detach()         # model's own token
+                    use_teacher = torch.rand(y_batch.size(0), 1, 1, device=device) < tf_ratio
+                    teacher_token = y_batch[:, t:t+1, :]
+                    model_token = pred_t.detach()
+                    next_input = torch.where(use_teacher, teacher_token, model_token)
                     decoder_input = torch.cat([decoder_input, next_input], dim=1)
 
             y_pred = torch.cat(all_preds, dim=1)  # (batch, lead_time, output_dim)
