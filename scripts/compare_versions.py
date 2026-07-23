@@ -145,7 +145,7 @@ SUMMARY_METRICS_SCALAR = {
 }
 
 
-def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, wind,
+def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, r_2, wind,
                 freqs, device, channel_set, aux_set):
     """Full test-set nn/evaluate.py metrics for a lone 'hs' or 'shape' checkpoint —
     no spectrum recombination, just that model's own predictions vs its own target."""
@@ -155,7 +155,7 @@ def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, 
     lead_time_steps = ckpt['lead_time_steps']
     params = ckpt['params']
     _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
-        density, alpha_1, alpha_2, r_1, params['seq_len'], lead_time_steps,
+        density, alpha_1, alpha_2, r_1, r_2, params['seq_len'], lead_time_steps,
         params['batch_size'], spec['target'], shuffle_seed=seed, wind=wind,
         channel_set=channel_set, aux_set=aux_set)
     metrics = evaluate(model, test_loader, device, freqs,
@@ -342,7 +342,7 @@ def main():
     for i, spec in enumerate(args.experiments):
         spec['color'] = CATEGORICAL_PALETTE[i % len(CATEGORICAL_PALETTE)]
 
-    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(project_root / 'buoy_data' / '42056' / 'processed_data.pkl')
+    density, alpha_1, alpha_2, r_1, r_2, wind = pd.read_pickle(project_root / 'buoy_data' / '42056' / 'processed_data.pkl')
     freqs = get_freqs(density)
     freqs_np = freqs.cpu().numpy() if torch.is_tensor(freqs) else np.asarray(freqs)
 
@@ -356,7 +356,7 @@ def main():
         for spec in args.experiments:
             print(f"\nEvaluating {spec['label']} (target={spec['target']})")
             metrics, lead_time_steps = load_scalar(
-                project_root, spec, args.lead, args.seed, density, alpha_1, alpha_2, r_1,
+                project_root, spec, args.lead, args.seed, density, alpha_1, alpha_2, r_1, r_2,
                 wind, freqs, device, args.channel_set, args.aux_set)
             results.append({**spec, 'metrics': metrics, 'lead_time_steps': lead_time_steps})
 
@@ -388,11 +388,11 @@ def main():
             # previous (undownsampled) behavior; find_checkpoint still falls
             # back to the pre-deltat results path for older experiments.
             ckpt, _ = find_checkpoint(project_root, spec['name'], 'density', 1, args.lead, args.seed)
-            return eval_single_density(ckpt, density, alpha_1, alpha_2, r_1, wind,
+            return eval_single_density(ckpt, density, alpha_1, alpha_2, r_1, r_2, wind,
                                        freqs, device, args.channel_set, args.aux_set, args.seed)
         else:
             return eval_combined(project_root, spec['name'], 1, args.lead, args.seed,
-                                 density, alpha_1, alpha_2, r_1, wind,
+                                 density, alpha_1, alpha_2, r_1, r_2, wind,
                                  freqs, device, args.channel_set, args.aux_set)
 
     results = []

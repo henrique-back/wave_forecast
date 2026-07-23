@@ -99,7 +99,7 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
 
 def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                   target, lead_time, lr, weight_decay, objective_metric,
-                  num_epochs=100, patience=10, trial=None):
+                  num_epochs=80, patience=10, trial=None):
     """Run the scheduled-sampling training loop with early stopping.
 
     Shared by objective() (Optuna trial) and scripts/train.py (fixed-config
@@ -120,7 +120,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     # stopping at patience=20, a run going to epoch ~40 will have tf_ratio
     # ≈ 0.5 — half its training steps use the model's own predictions, which
     # meaningfully closes the teacher-forcing / autoregressive distribution gap.
-    tf_decay_epochs = 4 * patience
+    tf_decay_epochs = 2 * patience
 
     best_val_score = float('-inf')
     best_val_metrics = None
@@ -187,7 +187,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     return best_val_score, best_val_metrics, best_model_state
 
 
-def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, batch_size,
+def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time, batch_size,
                           target, shuffle_seed, wind=None, channel_set='full', aux_set='none'):
     """Split, normalise, and window the spectral (+ optional aux) channels into DataLoaders.
 
@@ -218,6 +218,7 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
     train_alpha1, val_alpha1, test_alpha_1 = alpha_1[:train_end], alpha_1[train_end:val_end], alpha_1[val_end:]
     train_alpha2, val_alpha2, test_alpha_2 = alpha_2[:train_end], alpha_2[train_end:val_end], alpha_2[val_end:]
     train_r1, val_r1, test_r1             = r_1[:train_end], r_1[train_end:val_end], r_1[val_end:]
+    train_r2, val_r2, test_r2             = r_2[:train_end], r_2[train_end:val_end], r_2[val_end:]
 
     # Compute per-frequency training mean μ(f) BEFORE normalising.
     # This tensor is the denormalisation key: E_phys = Ẽ * μ(f).
@@ -262,7 +263,7 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
     train_alpha2_sin, val_alpha2_sin, test_alpha2_sin = (np.sin(np.radians(df)) for df in (train_alpha2, val_alpha2, test_alpha_2))
     train_alpha2_cos, val_alpha2_cos, test_alpha2_cos = (np.cos(np.radians(df)) for df in (train_alpha2, val_alpha2, test_alpha_2))
 
-    # r1 has no downstream physical constraint so z-score is safe. Only
+    # r1/r2 have no downstream physical constraint so z-score is safe. Only
     # normalise the ones this channel_set actually needs.
     channel_names = CHANNEL_SETS[channel_set]
     raw_channels = {
@@ -272,6 +273,7 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
         'alpha_2_sin': (train_alpha2_sin, val_alpha2_sin, test_alpha2_sin),
         'alpha_2_cos': (train_alpha2_cos, val_alpha2_cos, test_alpha2_cos),
         'r_1':         (train_r1, val_r1, test_r1),
+        'r_2':         (train_r2, val_r2, test_r2),
     }
     normalized = {'density': (train_density, val_density, test_density)}
     for name in channel_names:
@@ -329,7 +331,7 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, seq_len, lead_time, bat
             num_channels, num_aux_channels)
 
 
-def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target,
+def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, target,
               objective_metric='weighted_mean_SS', results_folder=None,
               wind=None, channel_set='full', aux_set='none'):
     # set_seed() is called once at script level — do NOT call it here.
@@ -365,7 +367,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, freqs, lead_time, target
     # differs between trials while remaining reproducible within each trial.
     train_loader, val_loader, test_loader, freq_means, num_freqs, num_channels, num_aux_channels = (
         _prepare_dataloaders(
-            density, alpha_1, alpha_2, r_1, seq_len, lead_time, batch_size, target,
+            density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time, batch_size, target,
             shuffle_seed=trial.number, wind=wind, channel_set=channel_set, aux_set=aux_set)
     )
 

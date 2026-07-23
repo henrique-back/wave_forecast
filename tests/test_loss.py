@@ -16,12 +16,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils.loss import DirectionalLoss, _FULL_CHANNELS
 
 
-def _make_sample(density, alpha1_deg, alpha2_deg, r1, num_freqs=4):
-    """(num_freqs, 6) tensor in DirectionalLoss's expected channel order."""
+def _make_sample(density, alpha1_deg, alpha2_deg, r1, r2=0.5, num_freqs=4):
+    """(num_freqs, 7) tensor in DirectionalLoss's expected channel order."""
     a1 = np.radians(alpha1_deg)
     a2 = np.radians(alpha2_deg)
     return torch.tensor([
-        [density, np.sin(a1), np.cos(a1), np.sin(a2), np.cos(a2), r1]
+        [density, np.sin(a1), np.cos(a1), np.sin(a2), np.cos(a2), r1, r2]
         for _ in range(num_freqs)
     ], dtype=torch.float32)
 
@@ -122,15 +122,15 @@ class TestDirectionalLossFreqWeighting:
         assert weighted_total.item() > flat_total.item()
 
     def test_batched_multistep_shape(self):
-        """(batch, lead_time, num_freqs, 6) — the shape a decoder output
-        would actually have — must work, not just the bare (num_freqs, 6)
+        """(batch, lead_time, num_freqs, 7) — the shape a decoder output
+        would actually have — must work, not just the bare (num_freqs, 7)
         used in the other tests here."""
         loss_fn = DirectionalLoss()
         batch, lead_time, num_freqs = 3, 5, 6
         true = torch.stack([
             _make_sample(1.5, 45.0, 200.0, 0.6, num_freqs=num_freqs)
             for _ in range(batch * lead_time)
-        ]).reshape(batch, lead_time, num_freqs, 6)
+        ]).reshape(batch, lead_time, num_freqs, 7)
         pred = true + 0.1
 
         total, components = loss_fn(pred, true)

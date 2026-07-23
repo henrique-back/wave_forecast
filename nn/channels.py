@@ -17,7 +17,7 @@ CHANNEL_SETS = {
     # alpha_1/alpha_2 are circular (mean/principal wave direction, degrees) —
     # fed as sin/cos pairs rather than the raw angle so that e.g. 1deg and
     # 359deg are adjacent to the model instead of maximally far apart.
-    'full':    ['density', 'alpha_1_sin', 'alpha_1_cos', 'alpha_2_sin', 'alpha_2_cos', 'r_1'],
+    'full':    ['density', 'alpha_1_sin', 'alpha_1_cos', 'alpha_2_sin', 'alpha_2_cos', 'r_1', 'r_2'],
 }
 
 NORM_MODES = {
@@ -27,6 +27,7 @@ NORM_MODES = {
     'alpha_2_sin': 'none',
     'alpha_2_cos': 'none',
     'r_1':         'zscore',
+    'r_2':         'zscore',  # same rationale as r_1 — no physical non-negativity constraint
 }
 
 AUX_CHANNEL_SETS = {

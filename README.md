@@ -1,7 +1,7 @@
 # wave_forecast
 
 This project applies transformer-based deep learning to wave spectra forecasting. A buoy produces
-4-channel directional wave spectra (spectral density, alpha1, alpha2, r1) over a log-spaced
+5-channel directional wave spectra (spectral density, alpha1, alpha2, r1, r2) over a log-spaced
 frequency grid, and the model forecasts significant wave height (`hs`), the full spectrum
 (`density`), or the unit-area normalized spectrum shape (`shape`) at lead times of 6/12/24/48
 hours.

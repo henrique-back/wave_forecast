@@ -8,13 +8,14 @@ import torch
 # anywhere else in this codebase; keep it that way. Must stay in sync with
 # CHANNEL_SETS['full'] in nn/channels.py.
 _FULL_CHANNELS = ['density', 'alpha_1_sin', 'alpha_1_cos',
-                   'alpha_2_sin', 'alpha_2_cos', 'r_1']
+                   'alpha_2_sin', 'alpha_2_cos', 'r_1', 'r_2']
 _DENSITY_IDX      = _FULL_CHANNELS.index('density')
 _ALPHA1_SIN_IDX   = _FULL_CHANNELS.index('alpha_1_sin')
 _ALPHA1_COS_IDX   = _FULL_CHANNELS.index('alpha_1_cos')
 _ALPHA2_SIN_IDX   = _FULL_CHANNELS.index('alpha_2_sin')
 _ALPHA2_COS_IDX   = _FULL_CHANNELS.index('alpha_2_cos')
 _R1_IDX           = _FULL_CHANNELS.index('r_1')
+_R2_IDX           = _FULL_CHANNELS.index('r_2')
 
 
 class RMSELoss(torch.nn.Module):
@@ -88,9 +89,9 @@ class DirectionalLoss(torch.nn.Module):
         """
         Parameters
         ----------
-        pred, true : torch.Tensor, shape (..., num_freqs, 6)
+        pred, true : torch.Tensor, shape (..., num_freqs, 7)
             Last axis in CHANNEL_SETS['full'] order: [density, alpha_1_sin,
-            alpha_1_cos, alpha_2_sin, alpha_2_cos, r_1].
+            alpha_1_cos, alpha_2_sin, alpha_2_cos, r_1, r_2].
         freq_weights : torch.Tensor | None, shape (num_freqs,)
             Optional trapezoidal frequency weights (e.g. utils.trapz_weights
             (freqs), sums to 1) applied identically to every term, matching
@@ -117,7 +118,8 @@ class DirectionalLoss(torch.nn.Module):
                  + _mse(pred[..., _ALPHA1_COS_IDX], true[..., _ALPHA1_COS_IDX])
         L_alpha2 = _mse(pred[..., _ALPHA2_SIN_IDX], true[..., _ALPHA2_SIN_IDX]) \
                  + _mse(pred[..., _ALPHA2_COS_IDX], true[..., _ALPHA2_COS_IDX])
-        L_r = _mse(pred[..., _R1_IDX], true[..., _R1_IDX])
+        L_r = _mse(pred[..., _R1_IDX], true[..., _R1_IDX]) \
+            + _mse(pred[..., _R2_IDX], true[..., _R2_IDX])
 
         total = (self.lambda_E * L_E
                  + self.lambda_alpha1 * L_alpha1

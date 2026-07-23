@@ -71,7 +71,7 @@ def data_processing(folder_path, save_path=None):
         folder_path (str): Path to folder containing the .txt files.
 
     Returns:
-        tuple: (density, alpha_1, alpha_2, r_1, wind) DataFrames after
+        tuple: (density, alpha_1, alpha_2, r_1, r_2, wind) DataFrames after
         reindexing & interpolation. wind has columns ['wind_u', 'wind_v'].
     """
     files = {
@@ -79,6 +79,7 @@ def data_processing(folder_path, save_path=None):
         'alpha_1': 'alpha1.txt',
         'alpha_2': 'alpha2.txt',
         'r_1': 'r1.txt',
+        'r_2': 'r2.txt',
     }
 
     data = {}

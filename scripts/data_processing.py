@@ -2,7 +2,7 @@
 Preprocess a buoy's raw NDBC .txt files into a single cached pickle.
 
 Only needed once per buoy — reads buoy_data/{BUOY_ID}/{density,alpha1,alpha2,
-r1,wind}.txt, reindexes to a full hourly index, interpolates gaps (circular-
+r1,r2,wind}.txt, reindexes to a full hourly index, interpolates gaps (circular-
 aware for alpha1/alpha2), and writes buoy_data/{BUOY_ID}/processed_data.pkl,
 the file every other script (scripts/optimize.py, scripts/train.py,
 scripts/infer.py) reads via pd.read_pickle.

@@ -38,14 +38,14 @@ set_seed(42)
 # nearest each edge (visible as a spurious low-frequency bump/negative dip
 # in shape_v8's test-set predictions) — an architecture change, so v8 trials
 # (optuna_study_v8.db) are not comparable to v9 trials either.
-STUDY_VERSION = "v9"
+STUDY_VERSION = "v10"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "shape_v9"
+EXPERIMENT_NAME = "shape_v10"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -54,6 +54,8 @@ EXPERIMENT_DESCRIPTION = (
     "Uses weighted mean Skill Score as objective."
     "Trains to predict spectral shape at 6h, 12h, 24h lead times."
     "Fixes RMSE weighting to use utils.trapz_weights instead of flat mean over log-spaced frequency grid."
+    "Adds padding_mode to convolutional frontend and enforce positivity with clamp (at inference) and softplus (at training)." \
+    "Includes r2 as new channel"
 )
 
 # Set parameters
@@ -63,7 +65,7 @@ n_trials = 50
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
 #   'density' : spectral density only
-#   'full'    : density + alpha_1 + alpha_2 + r_1 (current default)
+#   'full'    : density + alpha_1 + alpha_2 + r_1 + r_2 (current default)
 CHANNEL_SET = "full"
 assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
 
@@ -99,12 +101,12 @@ file_path = folder_path / "processed_data.pkl"
 # Load from file if it exists
 if file_path.exists():
     dfs_interpolated = pd.read_pickle(file_path)
-    density, alpha_1, alpha_2, r_1, wind = dfs_interpolated
+    density, alpha_1, alpha_2, r_1, r_2, wind = dfs_interpolated
     print("Loaded preprocessed wave spectral data")
 else:
     from utils.data_processing import data_processing  # or wherever your function lives
 
-    density, alpha_1, alpha_2, r_1, wind = data_processing(
+    density, alpha_1, alpha_2, r_1, r_2, wind = data_processing(
         folder_path, save_path=file_path
     )
 
@@ -153,6 +155,7 @@ for lead_time_hours in lead_times_hours:
         alpha_1=alpha_1,
         alpha_2=alpha_2,
         r_1=r_1,
+        r_2=r_2,
         wind=wind,
         channel_set=CHANNEL_SET,
         aux_set=AUX_SET,

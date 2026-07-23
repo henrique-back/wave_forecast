@@ -82,7 +82,7 @@ class FreqDimEmbedding(nn.Module):
 
     Args:
         num_freqs       : number of frequency bins (e.g. 47)
-        num_channels    : number of measurement channels per bin (e.g. 4)
+        num_channels    : number of measurement channels per bin (e.g. 7)
         freq_embed_dim  : intermediate per-bin representation size
         embed_dim       : final temporal token dimension (= head_dim × nhead)
         freqs           : torch.Tensor (num_freqs,) — actual frequency grid in
@@ -95,7 +95,7 @@ class FreqDimEmbedding(nn.Module):
                  freq_embed_dim: int, embed_dim: int,
                  freqs: torch.Tensor, dropout: float = 0.1):
         super().__init__()
-        # Shared across all frequency bins: maps 4-channel measurement → freq_embed_dim
+        # Shared across all frequency bins: maps per-bin measurement → freq_embed_dim
         self.freq_proj = nn.Linear(num_channels, freq_embed_dim)
         self.act = nn.GELU()
 

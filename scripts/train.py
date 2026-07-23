@@ -44,7 +44,7 @@ EXPERIMENT_NAME = "shape_v9"
 BUOY_ID = '32012'
 
 target = "shape"
-lead_times_hours = [24]
+lead_times_hours = [6]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
@@ -111,7 +111,7 @@ def main():
         raise FileNotFoundError(
             f"{file_path} not found — run scripts/data_processing.py first."
         )
-    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(file_path)
+    density, alpha_1, alpha_2, r_1, r_2, wind = pd.read_pickle(file_path)
     print("Loaded preprocessed wave spectral data")
 
     freqs = get_freqs(density)
@@ -157,6 +157,7 @@ def main():
                 alpha_1,
                 alpha_2,
                 r_1,
+                r_2,
                 params["seq_len"],
                 lead_time_steps,
                 params["batch_size"],

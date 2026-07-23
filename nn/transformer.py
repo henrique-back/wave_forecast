@@ -7,7 +7,7 @@ import torch.nn as nn
 from utils import get_start_token
 
 # Per-bin intermediate representation size used by FreqDimEmbedding.
-# Fixed at 8 — large enough to capture the relationship between the 4 channels
+# Fixed at 8 — large enough to capture the relationship between the channels
 # at each frequency bin without making the temporal_proj layer too large.
 _FREQ_EMBED_DIM = 8
 
@@ -17,7 +17,7 @@ class WaveHeightBaselineNN(nn.Module):
                 freqs,
                 num_freqs,
                 target='hs',
-                num_channels=4,
+                num_channels=7,
                 num_aux_channels=0,
                 nhead=2,
                 num_encoder_layers=2,
@@ -37,7 +37,7 @@ class WaveHeightBaselineNN(nn.Module):
 
         # ── Encoder embedding ────────────────────────────────────────────────
         # FreqDimEmbedding respects the (num_freqs, num_channels) structure:
-        # a shared linear maps the 4-channel measurement at each frequency bin
+        # a shared linear maps the per-bin measurement (num_channels wide)
         # into a per-bin representation, then all bins are aggregated into a
         # single embed_dim temporal token.  This gives the model a structural
         # prior that channels at the same frequency are related, producing

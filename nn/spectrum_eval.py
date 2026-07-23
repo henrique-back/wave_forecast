@@ -16,7 +16,7 @@ from nn.optimization import _prepare_dataloaders
 M0_MASK_THRESHOLD = 1e-4  # m²; matches nn/evaluate.py
 
 
-def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, wind_d,
+def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, wind_d,
                         freqs, device, channel_set, aux_set, seed):
     """Autoregressive inference for a monolithic density-target checkpoint.
 
@@ -32,7 +32,7 @@ def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, wind_d,
     lead_time_steps = ckpt['lead_time_steps']
 
     _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d, alpha_1_d, alpha_2_d, r_1_d, params['seq_len'], lead_time_steps,
+        density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, params['seq_len'], lead_time_steps,
         params['batch_size'], 'density', shuffle_seed=seed, wind=wind_d,
         channel_set=channel_set, aux_set=aux_set)
 
@@ -56,7 +56,7 @@ def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, wind_d,
 
 
 def eval_combined(project_root, experiment, deltat, lead, seed, density_d, alpha_1_d,
-                  alpha_2_d, r_1_d, wind_d, freqs, device, channel_set, aux_set):
+                  alpha_2_d, r_1_d, r_2_d, wind_d, freqs, device, channel_set, aux_set):
     """Recombine an experiment's separately-trained 'hs' and 'shape' checkpoints
     into a full physical density spectrum, evaluated over the entire test set
     (see scripts/infer.py's --target combined, which does this for a handful
@@ -80,11 +80,11 @@ def eval_combined(project_root, experiment, deltat, lead, seed, density_d, alpha
     shape_params = shape_ckpt['params']
 
     _, _, hs_test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d, alpha_1_d, alpha_2_d, r_1_d, hs_params['seq_len'], lead_time_steps,
+        density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, hs_params['seq_len'], lead_time_steps,
         hs_params['batch_size'], 'hs', shuffle_seed=seed, wind=wind_d,
         channel_set=channel_set, aux_set=aux_set)
     _, _, shape_test_loader, _, _, _, _ = _prepare_dataloaders(
-        density_d, alpha_1_d, alpha_2_d, r_1_d, shape_params['seq_len'], lead_time_steps,
+        density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, shape_params['seq_len'], lead_time_steps,
         shape_params['batch_size'], 'shape', shuffle_seed=seed, wind=wind_d,
         channel_set=channel_set, aux_set=aux_set)
     hs_dataset = hs_test_loader.dataset

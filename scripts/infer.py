@@ -62,7 +62,7 @@ from nn.spectrum_eval import eval_combined, compute_density_metrics
 from nn.optimization import _prepare_dataloaders
 from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
 
-BUOY_ID = "42056"
+BUOY_ID = "32012"
 
 
 def parse_args():
@@ -310,7 +310,7 @@ def print_bulk_table(
 
 
 def run_single(
-    args, project_root, density, alpha_1, alpha_2, r_1, wind, freqs, freqs_np, device
+    args, project_root, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, freqs_np, device
 ):
     ckpt, results_folder = find_checkpoint(
         project_root, args.experiment, args.target, 1, args.lead, args.seed
@@ -327,6 +327,7 @@ def run_single(
         alpha_1,
         alpha_2,
         r_1,
+        r_2,
         params["seq_len"],
         lead_time_steps,
         params["batch_size"],
@@ -505,7 +506,7 @@ def run_single(
 
 
 def run_combined(
-    args, project_root, density, alpha_1, alpha_2, r_1, wind, freqs, freqs_np, device
+    args, project_root, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, freqs_np, device
 ):
     hs_ckpt, hs_folder = find_checkpoint(
         project_root, args.experiment, "hs", 1, args.lead, args.seed
@@ -537,6 +538,7 @@ def run_combined(
         alpha_1,
         alpha_2,
         r_1,
+        r_2,
         hs_params["seq_len"],
         lead_time_steps,
         hs_params["batch_size"],
@@ -551,6 +553,7 @@ def run_combined(
         alpha_1,
         alpha_2,
         r_1,
+        r_2,
         shape_params["seq_len"],
         lead_time_steps,
         shape_params["batch_size"],
@@ -603,6 +606,7 @@ def run_combined(
             alpha_1,
             alpha_2,
             r_1,
+            r_2,
             wind,
             freqs,
             device,
@@ -731,7 +735,7 @@ def main():
         raise FileNotFoundError(
             f"{file_path} not found — run scripts/data_processing.py first."
         )
-    density, alpha_1, alpha_2, r_1, wind = pd.read_pickle(file_path)
+    density, alpha_1, alpha_2, r_1, r_2, wind = pd.read_pickle(file_path)
     freqs = get_freqs(density)
     freqs_np = freqs.numpy()
     device = get_device()
@@ -744,6 +748,7 @@ def main():
             alpha_1,
             alpha_2,
             r_1,
+            r_2,
             wind,
             freqs,
             freqs_np,
@@ -757,6 +762,7 @@ def main():
             alpha_1,
             alpha_2,
             r_1,
+            r_2,
             wind,
             freqs,
             freqs_np,
