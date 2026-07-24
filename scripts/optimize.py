@@ -38,6 +38,21 @@ set_seed(42)
 # nearest each edge (visible as a spurious low-frequency bump/negative dip
 # in shape_v8's test-set predictions) — an architecture change, so v8 trials
 # (optuna_study_v8.db) are not comparable to v9 trials either.
+#
+# v10 (in place, no version bump — the original v10 DB was deleted before any
+# of these trials were compared against): switched the optimizer from
+# optim.Adam to optim.AdamW (nn/optimization.py::_train_model), narrowed lr's
+# search range to bracket shape_v9's best trials (1e-3 - 1.5e-2, was
+# 1e-4 - 1e-2), and split the single `dropout` hyperparameter into
+# `freq_embed_dropout` (FreqDimEmbedding's freq_embed_dim=8-wide internal
+# conv) and `embed_dropout` (PositionalEncoding, the top-level time-axis
+# TemporalConvFrontend, and nn.Transformer's own internal attention/FFN
+# dropout — this last one was previously never wired up at all and silently
+# stuck at PyTorch's default of 0.1). weight_decay's range is intentionally
+# left unchanged despite the optimizer switch: Adam's coupled L2 weight decay
+# and AdamW's decoupled weight decay behave differently for the same numeric
+# value, so shape_v9's Adam-tuned weight_decay values aren't known to
+# transfer. See nn/optimization.py::objective() for the exact ranges.
 STUDY_VERSION = "v10"
 
 # Short slug used as the top-level folder under results/.
@@ -55,7 +70,10 @@ EXPERIMENT_DESCRIPTION = (
     "Trains to predict spectral shape at 6h, 12h, 24h lead times."
     "Fixes RMSE weighting to use utils.trapz_weights instead of flat mean over log-spaced frequency grid."
     "Adds padding_mode to convolutional frontend and enforce positivity with clamp (at inference) and softplus (at training)." \
-    "Includes r2 as new channel"
+    "Includes r2 as new channel."
+    "Switches optimizer to AdamW, narrows lr search range around shape_v9's best trials, and "
+    "splits the single dropout hyperparameter into freq_embed_dropout and embed_dropout (the "
+    "latter now also drives nn.Transformer's own internal dropout, previously unwired)."
 )
 
 # Set parameters

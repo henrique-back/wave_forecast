@@ -25,7 +25,8 @@ class WaveHeightBaselineNN(nn.Module):
                 embed_dim=16,
                 batch_first=True,
                 max_len=500,
-                dropout=0.1):
+                freq_embed_dropout=0.1,
+                embed_dropout=0.1):
 
         super().__init__()
 
@@ -48,7 +49,7 @@ class WaveHeightBaselineNN(nn.Module):
             freq_embed_dim=_FREQ_EMBED_DIM,
             embed_dim=embed_dim,
             freqs=freqs,
-            dropout=dropout,
+            dropout=freq_embed_dropout,
         )
 
         # Decoder input is either scalar Hs (1-dim, flat Linear — no frequency
@@ -67,7 +68,7 @@ class WaveHeightBaselineNN(nn.Module):
                 freq_embed_dim=_FREQ_EMBED_DIM,
                 embed_dim=embed_dim,
                 freqs=freqs,
-                dropout=dropout,
+                dropout=freq_embed_dropout,
             )
         )
 
@@ -84,14 +85,14 @@ class WaveHeightBaselineNN(nn.Module):
 
         # ── Positional encoding (shared between encoder and decoder) ─────────
         self.pos_encoder = PositionalEncoding(embed_dim, max_len=max_len,
-                                              dropout=dropout)
+                                              dropout=embed_dropout)
 
         # ── Temporal conv front-end (encoder only) ───────────────────────────
         # Three dilated Conv1d layers (dilation 1, 2, 4) with pre-norm residuals
         # extract local temporal patterns at 3h/5h/9h scales before the global
         # self-attention layers.  Applied only to the encoder; the decoder is
         # short (≤ lead_time steps) and already uses a causal mask.
-        self.temporal_conv = TemporalConvFrontend(embed_dim, dropout=dropout)
+        self.temporal_conv = TemporalConvFrontend(embed_dim, dropout=embed_dropout)
 
         # ── Transformer ──────────────────────────────────────────────────────
         # norm_first=True (pre-norm) matches temporal_conv's pre-norm residual
@@ -105,6 +106,7 @@ class WaveHeightBaselineNN(nn.Module):
             d_model=embed_dim,
             batch_first=batch_first,
             norm_first=True,
+            dropout=embed_dropout,
         )
 
         # Output layer — predict either 1 value (hs) or num_freqs (density)

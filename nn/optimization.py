@@ -109,7 +109,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
 
     Returns (best_val_score, best_val_metrics, best_model_state).
     """
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     # patience=3 so the LR is halved 7 epochs before early stopping fires (at
     # patience=10), giving the model meaningful time to benefit from the new LR.
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -346,8 +346,25 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     # batch_size for longer horizons to avoid CUDA OOM
     batch_size_choices = [32, 64] if lead_time > 24 else [32, 64, 128]
     batch_size = trial.suggest_categorical('batch_size', batch_size_choices)
-    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-    dropout = trial.suggest_float('dropout', 0.1, 0.3)
+    # Narrowed to bracket shape_v9's best trials (lr 3.7e-3 - 9.2e-3 across
+    # lead times) with headroom, now that we have a region to focus on.
+    lr = trial.suggest_float('lr', 1e-3, 1.5e-2, log=True)
+    # Split by which representation width the dropout acts on, rather than by
+    # module identity: freq_embed_dropout regularizes the freq_embed_dim=8
+    # per-bin representation inside every FreqDimEmbedding instance (encoder's
+    # and decoder's, when present), while embed_dropout regularizes the wider
+    # embed_dim representation shared by PositionalEncoding, the top-level
+    # (time-axis) TemporalConvFrontend, and nn.Transformer's own internal
+    # self-attention/FFN dropout. Dropping units out of the narrow 8-wide
+    # representation is a much bigger relative perturbation than dropping
+    # units out of the >=16-wide embed_dim representation, so the two
+    # plausibly want different optima.
+    freq_embed_dropout = trial.suggest_float('freq_embed_dropout', 0.1, 0.3)
+    # Lower bound 0.0 (vs freq_embed_dropout's 0.1) because this now also
+    # covers nn.Transformer's own dropout, which was previously never wired
+    # up at all and silently stuck at the library default of 0.1 — see
+    # nn/transformer.py's nn.Transformer(...) construction.
+    embed_dropout = trial.suggest_float('embed_dropout', 0.0, 0.3)
     # embed_dim derived as head_dim × nhead so it is always divisible by nhead.
     # nhead starts at 4 so the minimum embed_dim is 8×4=32.
     head_dim = trial.suggest_categorical('head_dim', [8, 16, 32])
@@ -355,6 +372,14 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     embed_dim = head_dim * nhead
     num_encoder_layers = trial.suggest_int('num_encoder_layers', 1, 4)
     num_decoder_layers = trial.suggest_int('num_decoder_layers', 1, 4)
+    # NOT narrowed around shape_v9's best weight_decay values (5.6e-5 - 4.4e-4),
+    # despite lr being narrowed above: those values were tuned under optim.Adam,
+    # which applies weight_decay as L2 regularization coupled into the gradient
+    # (then scaled by Adam's per-parameter adaptive moment estimates), whereas
+    # AdamW (see _train_model) decouples it into a direct
+    # param -= lr * weight_decay * param step. The two are not known to share
+    # an optimal region, so this keeps the original wide range to let Optuna
+    # re-discover it under the new optimizer.
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-2, log=True)
 
     # Safety net: embed_dim must be divisible by nhead (guaranteed by construction
@@ -381,7 +406,8 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
         target=target,
         num_channels=num_channels,
         num_aux_channels=num_aux_channels,
-        dropout=dropout,
+        freq_embed_dropout=freq_embed_dropout,
+        embed_dropout=embed_dropout,
         nhead=nhead,
         num_encoder_layers=num_encoder_layers,
         num_decoder_layers=num_decoder_layers,
