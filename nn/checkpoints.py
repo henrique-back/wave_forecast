@@ -48,11 +48,12 @@ def build_model(ckpt, freqs, device, channel_set='full', aux_set='none'):
         target=ckpt['target'],
         num_channels=len(CHANNEL_SETS[channel_set]),
         num_aux_channels=len(AUX_CHANNEL_SETS[aux_set]),
-        dropout=params['dropout'],
         nhead=params['nhead'],
         num_encoder_layers=params['num_encoder_layers'],
         num_decoder_layers=params['num_decoder_layers'],
         embed_dim=embed_dim,
+        freq_embed_dropout=params['freq_embed_dropout'],
+        embed_dropout=params['embed_dropout'],
     )
     model.load_state_dict(ckpt['model_state_dict'])
     model.to(device)

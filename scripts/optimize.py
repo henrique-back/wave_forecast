@@ -79,7 +79,7 @@ EXPERIMENT_DESCRIPTION = (
 # Set parameters
 lead_times_hours = [6, 12, 24]
 target = "shape"
-n_trials = 50
+n_trials = 40
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
 #   'density' : spectral density only
