@@ -53,20 +53,29 @@ set_seed(42)
 # and AdamW's decoupled weight decay behave differently for the same numeric
 # value, so shape_v9's Adam-tuned weight_decay values aren't known to
 # transfer. See nn/optimization.py::objective() for the exact ranges.
-STUDY_VERSION = "v10"
+#
+# v11: OBJECTIVE_METRIC (non-'hs' targets) switched from 'weighted_mean_SS' to
+# 'final_step_SS' (nn/optimization.py::_compute_val_score) — the exponential
+# per-step weighting biased trial/checkpoint selection toward the earlier,
+# easier autoregressive steps rather than the step that's actually the
+# forecast product at this lead time (intermediate steps are just
+# autoregressive scaffolding to get there). This changes what "best" means
+# for the same trial, so v10 trials are not comparable to v11 trials.
+STUDY_VERSION = "v11"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "shape_v10"
+EXPERIMENT_NAME = "shape_v11"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
     "Transformer with convolutional frontend and frequency-structured embedding."
     "Implements attention pooling"
-    "Uses weighted mean Skill Score as objective."
+    "Uses final-step Skill Score as objective (last forecast step only, not "
+    "an average across autoregressive steps)."
     "Trains to predict spectral shape at 6h, 12h, 24h lead times."
     "Fixes RMSE weighting to use utils.trapz_weights instead of flat mean over log-spaced frequency grid."
     "Adds padding_mode to convolutional frontend and enforce positivity with clamp (at inference) and softplus (at training)." \
@@ -79,7 +88,12 @@ EXPERIMENT_DESCRIPTION = (
 # Set parameters
 lead_times_hours = [6, 12, 24]
 target = "shape"
-n_trials = 40
+# With 9 tunable hyperparameters (4 categorical, 2 int, 3 continuous),
+# n_startup_trials=15 gives multivariate TPE enough random samples to fit an
+# initial KDE without eating half the budget on pure random search (as
+# n_startup_trials=20 of n_trials=40 did previously); n_trials=80 leaves 65
+# trials for TPE to actually exploit that model, vs. only 20 before.
+n_trials = 80
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
 #   'density' : spectral density only
@@ -98,7 +112,12 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
 # and report the Optuna trial value.  Must be one of:
+#   'final_step_SS'     Skill Score at the last forecast step only — the
+#                       actual chosen lead time, since the intermediate
+#                       autoregressive steps are scaffolding, not a deliverable
 #   'weighted_mean_SS'  exponentially-weighted mean per-step Skill Score
+#                       (biases toward earlier/easier steps, not the step
+#                       that's actually forecast)
 #   'overall_SS'        Skill Score on flattened all-step RMSE
 #   'Hs_SS'             Hs Skill Score — robust to seq_len; use when Hs accuracy
 #                       is the primary goal. For target=='hs' equals overall_SS;
@@ -108,7 +127,7 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 #   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
 #   'Shape_RMSE'        negative spectral shape RMSE (density target only)
 #   'SI_mean'           negative mean Scatter Index  (density target only)
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "final_step_SS"
 
 # Process data
 BUOY_ID = "32012"
@@ -186,12 +205,26 @@ for lead_time_hours in lead_times_hours:
 
     # Run optuna
     sampler = optuna.samplers.TPESampler(
-        n_startup_trials=20, multivariate=True, seed=42
+        n_startup_trials=15, multivariate=True, seed=42
     )
     # 30-step warmup avoids the over-pruning seen at exactly epoch 20 in earlier
     # studies (54% of 12h trials pruned at the boundary with n_warmup_steps=20).
-    pruner = optuna.pruners.MedianPruner(
-        n_warmup_steps=30, n_min_trials=5, interval_steps=1
+    # interval_steps=5 matches _train_model's PRUNER_SMOOTHING_WINDOW=5 trailing
+    # mean, so each check compares fresh, largely non-overlapping windows
+    # instead of re-checking the same slow-moving average every single epoch.
+    median_pruner = optuna.pruners.MedianPruner(
+        n_warmup_steps=30, n_min_trials=5, interval_steps=5
+    )
+    # v10 analysis of the 24h study (see shape_v10 results) showed trials
+    # pruned right at the tf_ratio-decay/warmup boundary with scores
+    # statistically indistinguishable from the eventual best trial at that
+    # same epoch — the best trial itself dipped and recovered several times
+    # before reaching its peak ~30 epochs later. PatientPruner requires
+    # `patience` consecutive non-improving reports (on top of MedianPruner's
+    # own verdict) before actually pruning, so a trial must be stuck, not just
+    # dipping, before it's cut.
+    pruner = optuna.pruners.PatientPruner(
+        median_pruner, patience=10, min_delta=0.0
     )
     study = optuna.create_study(
         study_name=study_name,

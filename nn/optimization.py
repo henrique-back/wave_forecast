@@ -60,8 +60,14 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
     - Error metrics (RMSE, Hs_RMSE, etc.) are negated.
 
     Valid values for objective_metric:
+        'final_step_SS'    : Skill Score at the last forecast step only (i.e.
+                             the actual chosen lead time — steps before it are
+                             autoregressive scaffolding, not a deliverable in
+                             their own right)
         'weighted_mean_SS' : exponentially-weighted mean per-step Skill Score
-                             (recommended default — robust to variable seq_len)
+                             (robust to variable seq_len, but biases toward
+                             the earlier/easier steps rather than the step
+                             that's actually forecast)
         'overall_SS'       : Skill Score on flattened all-step RMSE
         'Hs_SS'            : Hs Skill Score — robust to seq_len variation and
                              directly targets Hs. For target=='hs' equals
@@ -73,7 +79,9 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         'Shape_RMSE'       : negative spectral shape RMSE (density target only)
         'SI_mean'          : negative mean Scatter Index (density target only)
     """
-    if objective_metric == 'weighted_mean_SS':
+    if objective_metric == 'final_step_SS':
+        return metrics['per_step_SS'][-1]
+    elif objective_metric == 'weighted_mean_SS':
         return _weighted_mean_ss(metrics['per_step_SS'])
     elif objective_metric == 'overall_SS':
         return metrics['overall_SS']
@@ -92,8 +100,8 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
     else:
         raise ValueError(
             f"Unknown objective_metric {objective_metric!r}. Valid: "
-            "'weighted_mean_SS', 'overall_SS', 'Hs_SS', 'RMSE', 'Hs_RMSE', "
-            "'Tm02_RMSE', 'Shape_RMSE', 'SI_mean'"
+            "'final_step_SS', 'weighted_mean_SS', 'overall_SS', 'Hs_SS', "
+            "'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean'"
         )
 
 
@@ -121,6 +129,14 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     # ≈ 0.5 — half its training steps use the model's own predictions, which
     # meaningfully closes the teacher-forcing / autoregressive distribution gap.
     tf_decay_epochs = 2 * patience
+
+    # Epoch-to-epoch val_score is noisy (autoregressive eval on a small val
+    # split); reporting the raw value to the pruner let it compare trials on
+    # single unlucky/lucky epochs. A trailing mean smooths that out before it
+    # reaches trial.report/should_prune — best_val_score/early-stopping below
+    # still use the raw per-epoch value, since that only picks a checkpoint.
+    PRUNER_SMOOTHING_WINDOW = 5
+    val_score_history = []
 
     best_val_score = float('-inf')
     best_val_metrics = None
@@ -166,8 +182,11 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
               f"tf_ratio: {tf_ratio:.2f}"
               + bulk_str)
 
+        val_score_history.append(val_score)
+
         if trial is not None:
-            trial.report(val_score, epoch)
+            smoothed_score = float(np.mean(val_score_history[-PRUNER_SMOOTHING_WINDOW:]))
+            trial.report(smoothed_score, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
 

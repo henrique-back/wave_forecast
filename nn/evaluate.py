@@ -72,45 +72,55 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
     Always present:
         'Hs_SS'              : float, Skill Score for significant wave height.
-                               For target=='hs': equals overall_SS (predictions
-                               are already physical Hs, so this is exact).
-                               For target=='density': 1 − Hs_RMSE_model /
-                               Hs_RMSE_persistence, computed from denormalised
-                               spectra. Robust to seq_len variation; suitable
-                               as the Optuna objective when Hs accuracy is the
-                               primary goal.
+                               For target=='hs': equals per_step_SS[-1] on the
+                               physical Hs predictions — the final forecast
+                               step (the actual chosen lead time), not an
+                               average over the autoregressive steps leading
+                               up to it. For target=='density': 1 − Hs_RMSE_model /
+                               Hs_RMSE_persistence, pooled across all steps
+                               (computed from denormalised spectra — see the
+                               density-target block below, which is NOT
+                               final-step-only). Robust to seq_len variation;
+                               suitable as the Optuna objective when Hs
+                               accuracy is the primary goal.
 
     When model.target == 'density' and freq_means is not None, five additional
     metrics are appended (all in physical units — m²/Hz spectra, metres for
     Hs, seconds for Tm02 — because predictions are denormalised before any
-    integration):
+    integration). All five are computed on the FINAL forecast step only (the
+    actual chosen lead time), not pooled across the autoregressive steps
+    leading up to it — same reasoning as the 'hs'-target Hs_SS and
+    'final_step_SS' in nn/optimization.py::_compute_val_score:
 
     Bulk-parameter consistency (spectral moment integration):
         'Hs_RMSE'            : float, RMSE of Hs = 4√m₀  (predicted vs target)
-        'Hs_Bias'            : float, mean signed error of Hs (predicted − target)
-        'Tm02_RMSE'          : float, RMSE of Tm02 = √(m₀/m₂)
-        'Tm02_Bias'          : float, mean signed error of Tm02 (predicted − target)
+                               at the final step
+        'Hs_Bias'            : float, mean signed error of Hs (predicted −
+                               target) at the final step
+        'Tm02_RMSE'          : float, RMSE of Tm02 = √(m₀/m₂) at the final step
+        'Tm02_Bias'          : float, mean signed error of Tm02 (predicted −
+                               target) at the final step
 
     Spectral shape error (energy magnitude removed; normalised by target m₀):
         'Shape_RMSE'         : float, mean per-spectrum RMSE of E(f)/m₀_target
-                               (averaged over valid spectra, i.e. m₀_target ≥
-                               M0_MASK_THRESHOLD; isolates shape errors from
-                               energy magnitude errors). The per-spectrum RMSE
-                               itself is a frequency-weighted (trapezoidal)
-                               mean across bins — see note below.
-        'Shape_masked_samples': int, number of (sample, step) pairs excluded
-                               because m₀_target was below the threshold
+                               at the final step (averaged over valid spectra,
+                               i.e. m₀_target ≥ M0_MASK_THRESHOLD; isolates
+                               shape errors from energy magnitude errors). The
+                               per-spectrum RMSE itself is a frequency-weighted
+                               (trapezoidal) mean across bins — see note below.
+        'Shape_masked_samples': int, number of samples (at the final step)
+                               excluded because m₀_target was below the threshold
         'Shape_SS'           : float, Skill Score of Shape_RMSE vs a
                                persistence baseline computed the same way
-                               (last observed shape held constant).
+                               (last observed shape held constant), at the
+                               final step.
 
-    Per-frequency-bin Scatter Index:
+    Per-frequency-bin Scatter Index (final step only):
         'SI_per_bin'         : list[float], length num_freqs; SI[i] =
                                RMSE(E_pred[:,i], E_target[:,i]) /
-                               mean(E_target[:,i]), computed over all
-                               (sample × step) pairs flattened together;
-                               reveals which parts of the spectrum are hardest
-                               to forecast
+                               mean(E_target[:,i]), computed over all samples
+                               at the final forecast step; reveals which parts
+                               of the spectrum are hardest to forecast
         'SI_mean'            : float, frequency-weighted (trapezoidal) mean of
                                SI_per_bin across all bins; scalar summary for
                                monitoring
@@ -121,16 +131,22 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     per nn/prepare_y.py) and are NOT masked by M0_MASK_THRESHOLD — prepare_y
     discards m₀ for the 'shape' target, so degenerate low-energy spectra
     can't be identified/excluded here the way the 'density' branch does:
-        'Shape_RMSE'         : float, equal to the top-level 'RMSE' above
-                               (already frequency-weighted shape RMSE) —
+        'Shape_RMSE'         : float, equal to 'per_step_RMSE[-1]' — the final
+                               forecast step's frequency-weighted shape RMSE,
+                               NOT the all-step-pooled top-level 'RMSE' —
                                exposed under this name so it's directly
-                               comparable to the 'density' target's Shape_RMSE.
-        'Shape_SS'           : float, equal to the top-level 'overall_SS'
-                               above — the shape-space Skill Score vs the
-                               last-observed-shape persistence baseline.
+                               comparable to the 'density' target's Shape_RMSE
+                               (also final-step-only).
+        'Shape_SS'           : float, equal to 'per_step_SS[-1]' — the final
+                               step's shape-space Skill Score vs the
+                               last-observed-shape persistence baseline, NOT
+                               the all-step-pooled top-level 'overall_SS'.
         'Shape_Mass_Error'   : float, mean absolute deviation of
                                ∫S_pred(f) df from 1 across all (sample, step)
-                               pairs. Diagnostic only — model.infer() already
+                               pairs — deliberately NOT final-step-only, since
+                               it's a renormalization sanity check (catch a
+                               regression at ANY step), not a lead-time
+                               performance metric. model.infer() already
                                renormalizes each predicted step to unit area,
                                so this should be ~0; a nonzero value here
                                would indicate infer()'s renormalization isn't
@@ -267,9 +283,11 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     rmse_pers  = rmse_fn(y_pers_all, y_true_all, weights=freq_weights).item()
     cc         = _weighted_cc(y_pred_all, y_true_all)
     overall_ss = 1.0 - rmse / rmse_pers if rmse_pers > 0 else float('nan')
-    # For hs target y_pred/y_true are physical Hs, so overall_SS == Hs_SS exactly.
+    # For hs target y_pred/y_true are physical Hs, so this is the final-step
+    # (i.e. the actual forecast lead time, not an average over the
+    # autoregressive steps leading up to it) Skill Score on physical Hs.
     # For density target this is overwritten below using denormalised Hs.
-    hs_ss = overall_ss
+    hs_ss = per_step_ss[-1]
     bias       = _weighted_bias(y_pred_all, y_true_all)
     r2         = _weighted_r2(y_pred_all, y_true_all)
 
@@ -302,6 +320,17 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         pred_np = y_pred_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
         true_np = y_true_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
 
+        # Restrict every bulk/shape/SI metric below to the FINAL forecast step
+        # only (the actual chosen lead time) rather than pooling across all
+        # autoregressive steps — intermediate steps are scaffolding to reach
+        # that step, not a deliverable evaluated in their own right (same
+        # reasoning as 'final_step_SS' in nn/optimization.py::_compute_val_score
+        # and the 'hs'-target Hs_SS above). The lead_time axis is kept at
+        # size 1 (not squeezed) so every shape/indexing assumption below
+        # (axis=2 for freq, reshape(-1, num_freqs), etc.) still holds.
+        pred_np = pred_np[:, -1:, :]
+        true_np = true_np[:, -1:, :]
+
         # --- Bulk parameter consistency ---
         # compute_bulk_params uses torch.trapezoid-equivalent trapezoidal
         # integration over the actual (log-spaced) frequency grid.
@@ -316,7 +345,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
         # Hs Skill Score: normalise model RMSE against persistence Hs RMSE so
         # the metric is robust to seq_len variation across Optuna trials.
-        pers_np      = y_pers_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
+        pers_np      = (y_pers_all.numpy() * fm_np[np.newaxis, np.newaxis, :])[:, -1:, :]
         hs_pers, _   = compute_bulk_params(pers_np, freqs_np)
         hs_rmse_pers = float(np.sqrt(np.mean((hs_pers - hs_true) ** 2)))
         hs_rmse_model = float(np.sqrt(np.mean(hs_err ** 2)))
@@ -358,7 +387,8 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
         # --- Per-frequency-bin Scatter Index ---
         # Flatten to (N, num_freqs) so each bin's RMSE and mean are computed
-        # over all (sample × step) pairs.  SI[i] = RMSE_i / mean(E_true_i).
+        # over all samples at the final forecast step (pred_np/true_np were
+        # already sliced to the last step above).  SI[i] = RMSE_i / mean(E_true_i).
         flat_pred = pred_np.reshape(-1, pred_np.shape[2])   # (N, num_freqs)
         flat_true = true_np.reshape(-1, true_np.shape[2])
 
@@ -385,11 +415,16 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         freqs_np = freqs.cpu().numpy()
         # Mass-conservation diagnostic: model.infer() already renormalizes
         # each predicted step to unit area, so this should be ~0 — see the
-        # 'Shape_Mass_Error' docstring entry above.
+        # 'Shape_Mass_Error' docstring entry above. Deliberately NOT restricted
+        # to the final step (unlike Shape_RMSE/Shape_SS below) — it's a
+        # sanity check for a renormalization regression at ANY step, not a
+        # lead-time performance metric.
         mass = np.trapezoid(y_pred_all.numpy(), freqs_np, axis=2)  # (batch, lead_time)
         bulk = {
-            'Shape_RMSE'      : rmse,
-            'Shape_SS'        : overall_ss,
+            # Final forecast step only, matching per_step_rmse/per_step_ss's
+            # role elsewhere — not the all-step-pooled 'rmse'/'overall_ss'.
+            'Shape_RMSE'      : per_step_rmse[-1],
+            'Shape_SS'        : per_step_ss[-1],
             'Shape_Mass_Error': float(np.mean(np.abs(mass - 1.0))),
         }
 
