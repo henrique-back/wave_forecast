@@ -31,7 +31,7 @@ def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, win
     fm_np = freq_means.cpu().numpy()
     lead_time_steps = ckpt['lead_time_steps']
 
-    _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, params['seq_len'], lead_time_steps,
         params['batch_size'], 'density', shuffle_seed=seed, wind=wind_d,
         channel_set=channel_set, aux_set=aux_set)
@@ -44,9 +44,12 @@ def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, win
             pers = start_token.unsqueeze(1).expand(-1, y.shape[1], -1)
             pred = model.infer(X, freqs, lead_time_steps, freq_means=freq_means, aux=aux)
 
-            all_pred.append(pred.cpu().numpy() * fm_np)
+            # pred/pers are log-spectral-energy (nn/transformer.py::infer(),
+            # utils/get_start_token.py); y is the raw dataset ground truth,
+            # still Ẽ = E/μ(f), unaffected by the ablation.
+            all_pred.append(np.exp(pred.cpu().numpy()))
             all_true.append(y.cpu().numpy() * fm_np)
-            all_pers.append(pers.cpu().numpy() * fm_np)
+            all_pers.append(np.exp(pers.cpu().numpy()))
 
     pred_np = np.concatenate(all_pred, axis=0)
     true_np = np.concatenate(all_true, axis=0)
@@ -76,14 +79,15 @@ def eval_combined(project_root, experiment, deltat, lead, seed, density_d, alpha
     shape_model = build_model(shape_ckpt, freqs, device, channel_set, aux_set)
     hs_freq_means = hs_ckpt['freq_means'].to(device)
     shape_freq_means = shape_ckpt['freq_means'].to(device)
+    shape_means = shape_ckpt['shape_means'].to(device)
     hs_params = hs_ckpt['params']
     shape_params = shape_ckpt['params']
 
-    _, _, hs_test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, hs_test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, hs_params['seq_len'], lead_time_steps,
         hs_params['batch_size'], 'hs', shuffle_seed=seed, wind=wind_d,
         channel_set=channel_set, aux_set=aux_set)
-    _, _, shape_test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, shape_test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, shape_params['seq_len'], lead_time_steps,
         shape_params['batch_size'], 'shape', shuffle_seed=seed, wind=wind_d,
         channel_set=channel_set, aux_set=aux_set)
@@ -117,9 +121,12 @@ def eval_combined(project_root, experiment, deltat, lead, seed, density_d, alpha
             aux_shape = shape_dataset.aux[idx_shape].to(device)
 
             hs_pred = hs_model.infer(X_hs, freqs, lead_time_steps, freq_means=hs_freq_means, aux=aux_hs)
-            shape_pred = shape_model.infer(X_shape, freqs, lead_time_steps, freq_means=shape_freq_means, aux=aux_shape)
+            shape_pred = shape_model.infer(X_shape, freqs, lead_time_steps, freq_means=shape_freq_means,
+                                           shape_means=shape_means, aux=aux_shape)
 
-            shape_pred_np = shape_pred.cpu().numpy()
+            # shape_pred is log-shape (nn/transformer.py::infer()); exp()
+            # back to linear unit-area shape before recombining with m0.
+            shape_pred_np = np.exp(shape_pred.cpu().numpy())
             m0_pred = ((hs_pred / 4.0) ** 2).cpu().numpy()
             pred_phys = shape_pred_np * m0_pred
 

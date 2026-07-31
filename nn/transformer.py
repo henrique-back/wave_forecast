@@ -4,7 +4,7 @@ from .freq_embedding import FreqDimEmbedding
 from .temporal_conv import TemporalConvFrontend
 import torch
 import torch.nn as nn
-from utils import get_start_token
+from utils import get_start_token, to_log_space
 
 # Per-bin intermediate representation size used by FreqDimEmbedding.
 # Fixed at 8 — large enough to capture the relationship between the channels
@@ -109,23 +109,13 @@ class WaveHeightBaselineNN(nn.Module):
             dropout=embed_dropout,
         )
 
-        # Output layer — predict either 1 value (hs) or num_freqs (density)
+        # Output layer — predict either 1 value (hs) or num_freqs (density/shape).
+        # density/shape predict log-spectral energy (log E(f) or log E(f)/m0)
+        # rather than the physical value directly — non-negativity of the
+        # physical quantity is then guaranteed for free by exp() at the
+        # point of use, with no architectural constraint needed here.
         output_dim = 1 if self.target == 'hs' else num_freqs
-        if self.target == 'hs':
-            self.predictor = nn.Linear(embed_dim, output_dim)
-        else:
-            # density/shape predict a physical spectral energy density,
-            # which is never negative (Hs = 4*sqrt(m0) requires m0 >= 0). A
-            # plain Linear has no such constraint, so the model is only ever
-            # discouraged from negative energy by the loss, never
-            # prevented — Softplus makes it architecturally impossible.
-            # Smooth and non-zero everywhere (unlike ReLU), so bins that
-            # should carry near-zero energy still get a live gradient
-            # instead of dying at exactly zero.
-            self.predictor = nn.Sequential(
-                nn.Linear(embed_dim, output_dim),
-                nn.Softplus(),
-            )
+        self.predictor = nn.Linear(embed_dim, output_dim)
 
 
     def encode(self, src, aux=None):
@@ -167,7 +157,7 @@ class WaveHeightBaselineNN(nn.Module):
 
 
     @torch.no_grad()
-    def infer(self, src, freqs, lead_time, freq_means=None, aux=None):
+    def infer(self, src, freqs, lead_time, freq_means=None, shape_means=None, aux=None):
         """Autoregressive inference for multi-step forecasting.
 
         Args:
@@ -175,9 +165,15 @@ class WaveHeightBaselineNN(nn.Module):
             freqs      : torch.Tensor [num_freqs] — actual frequency grid
             lead_time  : int — number of future steps to forecast
             freq_means : torch.Tensor | None [num_freqs] — per-frequency training
-                         mean μ(f) used to denormalise the spectrum before computing
-                         the Hs start token (required for physically correct Hs when
-                         target == 'hs'; unused for density target)
+                         mean μ(f) of the physical density. Required for
+                         target in ('hs', 'density', 'shape') — see
+                         get_start_token. For 'density'/'shape' the returned
+                         sequence is log-spectral-energy (log E(f) or
+                         log E(f)/m0, respectively) — callers must exp() it
+                         to recover physical units.
+            shape_means : torch.Tensor | None [num_freqs] — per-frequency
+                         training mean of the physical unit-area shape
+                         target. Required when target == 'shape'.
             aux        : torch.Tensor | None [batch_size, src_seq_len, num_aux_channels]
                          — auxiliary encoder side-input (e.g. wind_u/wind_v)
 
@@ -196,12 +192,14 @@ class WaveHeightBaselineNN(nn.Module):
                              device=src.device)
 
         start_token = get_start_token(src, self.target, freqs, src.device,
-                                      freq_means=freq_means)
+                                      freq_means=freq_means, shape_means=shape_means)
         output[:, 0] = start_token
 
         # freqs may be passed in on a different device (e.g. loaded on CPU
         # while the model runs on mps/cuda) — move once, outside the loop.
         freqs_dev = freqs.to(src.device)
+        if self.target == 'shape':
+            shape_means_dev = shape_means.to(src.device)
 
         for i in range(lead_time):
             # Growing slice, not the full padded tensor: the causal mask
@@ -212,35 +210,24 @@ class WaveHeightBaselineNN(nn.Module):
             step_pred = preds[:, i]
 
             if self.target == 'shape':
-                # The decoder isn't architecturally constrained to output a
-                # non-negative, unit-area spectrum, so enforce both here.
-                # This only affects inference — teacher-forced training
-                # still optimises against the raw decoder output
-                # (nn/training_loop.py).
-                #
-                # Clamp to non-negative BEFORE integrating: a raw linear
-                # output can have negative bins, and dividing by the *signed*
-                # integral (as a previous version of this code did) lets
-                # negative bins eat into the total mass, inflating the
-                # rescale factor applied to every bin — including the
-                # correctly-signed positive ones — so the whole spectrum's
-                # shape gets distorted, not just the negative bins. Clamping
-                # first means the mass reflects only real (positive)
-                # content, and the negative bins are simply dropped rather
-                # than allowed to cancel against positive ones.
-                step_pred = step_pred.clamp(min=0.0)
+                # The decoder now predicts log-shape; recover linear-space
+                # shape before doing the mass-renormalization arithmetic
+                # below, which operates on the actual (linear) unit-area
+                # distribution. exp() is always > 0, so unlike the previous
+                # raw-Linear-output regime, there's no need to separately
+                # clamp out negative bins first.
+                step_pred = torch.exp(step_pred)
                 step_mass = torch.trapezoid(step_pred, freqs_dev, dim=-1)
 
-                # Degenerate case: every bin was negative pre-clamp, so
-                # step_pred is now all zeros and there's no clamped mass to
-                # rescale by. Falling back to the discarded negative values
-                # (as a previous version did, dividing by their own negative
-                # mass) would just reintroduce the sign-cancellation this
-                # clamp exists to remove. Fall back to a flat distribution
-                # instead — trapz of a constant c over [freqs[0], freqs[-1]]
-                # is exactly c * (freqs[-1] - freqs[0]) regardless of the
-                # grid's (non-uniform) spacing, so this exactly integrates to
-                # 1 and makes no claim about spectral shape.
+                # Degenerate case: exp() underflowed to (near-)zero across
+                # every bin — e.g. an untrained/diverged model producing a
+                # very negative log-value. Falling back to the discarded
+                # values here would just propagate the underflow. Fall back
+                # to a flat distribution instead — trapz of a constant c over
+                # [freqs[0], freqs[-1]] is exactly c * (freqs[-1] - freqs[0])
+                # regardless of the grid's (non-uniform) spacing, so this
+                # exactly integrates to 1 and makes no claim about spectral
+                # shape.
                 tiny = step_mass < 1e-8
                 if tiny.any():
                     flat_value = 1.0 / (freqs_dev[-1] - freqs_dev[0])
@@ -249,6 +236,11 @@ class WaveHeightBaselineNN(nn.Module):
                     step_mass = torch.where(tiny, torch.ones_like(step_mass), step_mass)
 
                 step_pred = step_pred / step_mass.unsqueeze(-1)
+
+                # Convert back to log-space before feeding this step back in
+                # as the next decoder input — the decoder must consistently
+                # see log-shape on both sides of the autoregressive loop.
+                step_pred = to_log_space(step_pred, shape_means_dev)
 
             output[:, i + 1] = step_pred
 

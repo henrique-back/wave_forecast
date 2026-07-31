@@ -22,7 +22,7 @@ class RMSELoss(torch.nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, y_pred, y_true, weights=None):
+    def forward(self, y_pred, y_true, weights=None, squared=False):
         """
         Parameters
         ----------
@@ -34,13 +34,19 @@ class RMSELoss(torch.nn.Module):
             frequency-weighted MSE instead of a flat elementwise mean.
             When None, behaves exactly like plain MSE (equal weight per
             element), matching the previous nn.MSELoss-based behaviour.
+        squared : bool
+            When True, return the (possibly frequency-weighted) MSE without
+            the final sqrt — i.e. plain MSE, for targets trained directly in
+            log-space (see nn/training_loop.py) where the RMSE's extra
+            1/(2*RMSE) gradient scaling isn't wanted. Default False preserves
+            this class's original RMSE behaviour.
         """
         sq_err = (y_pred - y_true) ** 2
         if weights is None:
             mse = sq_err.mean()
         else:
             mse = (sq_err * weights).sum(dim=-1).mean()
-        return torch.sqrt(mse)
+        return mse if squared else torch.sqrt(mse)
 
 
 class DirectionalLoss(torch.nn.Module):

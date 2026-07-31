@@ -152,14 +152,16 @@ def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, 
     ckpt, _ = find_checkpoint(project_root, spec['name'], spec['target'], 1, lead, seed)
     model = build_model(ckpt, freqs, device, channel_set, aux_set)
     freq_means = ckpt['freq_means'].to(device)
+    shape_means = ckpt['shape_means'].to(device) if ckpt.get('shape_means') is not None else None
     lead_time_steps = ckpt['lead_time_steps']
     params = ckpt['params']
-    _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density, alpha_1, alpha_2, r_1, r_2, params['seq_len'], lead_time_steps,
         params['batch_size'], spec['target'], shuffle_seed=seed, wind=wind,
         channel_set=channel_set, aux_set=aux_set)
     metrics = evaluate(model, test_loader, device, freqs,
-                       lead_time=lead_time_steps, freq_means=freq_means)
+                       lead_time=lead_time_steps, freq_means=freq_means,
+                       shape_means=shape_means)
     return metrics, lead_time_steps
 
 

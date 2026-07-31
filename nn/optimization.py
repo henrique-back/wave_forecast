@@ -106,7 +106,7 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
 
 
 def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
-                  target, lead_time, lr, weight_decay, objective_metric,
+                  shape_means, target, lead_time, lr, weight_decay, objective_metric,
                   num_epochs=80, patience=10, trial=None):
     """Run the scheduled-sampling training loop with early stopping.
 
@@ -147,9 +147,11 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         tf_ratio = max(0.0, 1.0 - epoch / tf_decay_epochs)
 
         train_metrics = train_one_epoch(model, train_loader, optimizer, device, freqs,
-                                        tf_ratio=tf_ratio, freq_means=freq_means)
+                                        tf_ratio=tf_ratio, freq_means=freq_means,
+                                        shape_means=shape_means)
         val_metrics   = evaluate(model, val_loader, device, freqs,
-                                  lead_time=lead_time, freq_means=freq_means)
+                                  lead_time=lead_time, freq_means=freq_means,
+                                  shape_means=shape_means)
 
         val_score = _compute_val_score(val_metrics, objective_metric)
 
@@ -221,10 +223,14 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
     are fused into the encoder separately via prepare_aux — wind is required
     (non-None) whenever aux_set != 'none'.
 
-    Returns (train_loader, val_loader, test_loader, freq_means, num_freqs,
-    num_channels, num_aux_channels).
+    Returns (train_loader, val_loader, test_loader, freq_means, shape_means,
+    num_freqs, num_channels, num_aux_channels).
     freq_means is the per-frequency training-split mean μ(f) — the
-    denormalisation key E_phys = Ẽ * μ(f) used throughout training/eval.
+    denormalisation key E_phys = Ẽ * μ(f) used throughout training/eval, and
+    (for target == 'density') the log-space floor reference (see
+    utils.to_log_space). shape_means is the per-frequency training-split
+    mean of the physical unit-area shape target — the analogous log-space
+    floor reference for target == 'shape'; None for other targets.
     """
     n = len(density)
     train_end = int(0.7 * n)   # 70% train
@@ -255,6 +261,7 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
     # distort the shape, since it scales each bin by a different constant).
     # For the density target, targets are the normalised spectra (model operates
     # in normalised space; freq_means is applied externally at loss/metric time).
+    shape_means = None
     if target == 'hs':
         train_y = prepare_y(train_density, seq_len, lead_time, target='hs')
         val_y   = prepare_y(val_density,   seq_len, lead_time, target='hs')
@@ -263,6 +270,11 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
         train_y = prepare_y(train_density, seq_len, lead_time, target='shape')
         val_y   = prepare_y(val_density,   seq_len, lead_time, target='shape')
         test_y  = prepare_y(test_density,  seq_len, lead_time, target='shape')
+        # Per-frequency training-mean of the physical shape target — the
+        # log-space floor reference for target == 'shape' (see
+        # utils.to_log_space), fit on the training split only, same
+        # discipline as freq_means above.
+        shape_means = torch.clamp(train_y.mean(dim=(0, 1)), min=1e-8).to(dtype=torch.float32)
 
     # Normalize inputs — fit on training data, apply to all splits.
     # Density uses scale-only normalization (divide by per-frequency training mean)
@@ -346,8 +358,8 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
     test_loader  = DataLoader(WaveSpectralDataset(test_X, test_aux, test_y), batch_size=batch_size, shuffle=False,
                               worker_init_fn=_seed_worker, generator=g)
 
-    return (train_loader, val_loader, test_loader, freq_means, train_X.shape[2],
-            num_channels, num_aux_channels)
+    return (train_loader, val_loader, test_loader, freq_means, shape_means,
+            train_X.shape[2], num_channels, num_aux_channels)
 
 
 def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, target,
@@ -367,6 +379,15 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     batch_size = trial.suggest_categorical('batch_size', batch_size_choices)
     # Narrowed to bracket shape_v9's best trials (lr 3.7e-3 - 9.2e-3 across
     # lead times) with headroom, now that we have a region to focus on.
+    #
+    # v12 caveat: this bracket was tuned under the OLD Softplus +
+    # physical-space-RMSE regime for 'density'/'shape' targets. Those targets
+    # now train on frequency-weighted plain MSE in log-space (see
+    # scripts/optimize.py's STUDY_VERSION v12 comment) — a comparably large
+    # regime change to the Adam->AdamW switch that this file's weight_decay
+    # comment (below) deliberately did NOT re-narrow for. This range is left
+    # as-is for now (not silently assumed valid) — widen it if v12 trials
+    # cluster at either edge.
     lr = trial.suggest_float('lr', 1e-3, 1.5e-2, log=True)
     # Split by which representation width the dropout acts on, rather than by
     # module identity: freq_embed_dropout regularizes the freq_embed_dim=8
@@ -409,7 +430,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     # --- Data preparation ---
     # DataLoader shuffle seeded per trial (using trial.number) so shuffle order
     # differs between trials while remaining reproducible within each trial.
-    train_loader, val_loader, test_loader, freq_means, num_freqs, num_channels, num_aux_channels = (
+    train_loader, val_loader, test_loader, freq_means, shape_means, num_freqs, num_channels, num_aux_channels = (
         _prepare_dataloaders(
             density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time, batch_size, target,
             shuffle_seed=trial.number, wind=wind, channel_set=channel_set, aux_set=aux_set)
@@ -436,7 +457,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
 
     try:
         best_val_score, best_val_metrics, best_model_state = _train_model(
-            model, train_loader, val_loader, device, freqs, freq_means,
+            model, train_loader, val_loader, device, freqs, freq_means, shape_means,
             target, lead_time, lr, weight_decay, objective_metric,
             num_epochs=100, patience=20, trial=trial)
     except torch.OutOfMemoryError:
@@ -466,6 +487,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
                 'target': target,
                 'lead_time_steps': lead_time,
                 'freq_means': freq_means,
+                'shape_means': shape_means,
                 'freqs': freqs,
                 'trial_number': trial.number,
                 'val_score': best_val_score,
@@ -496,6 +518,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
     test_metrics = evaluate(model, test_loader, device, freqs,
-                             lead_time=lead_time, freq_means=freq_means)
+                             lead_time=lead_time, freq_means=freq_means,
+                             shape_means=shape_means)
     print(f"Final test metrics: {test_metrics}")
     return best_val_score

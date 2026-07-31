@@ -61,6 +61,28 @@ set_seed(42)
 # forecast product at this lead time (intermediate steps are just
 # autoregressive scaffolding to get there). This changes what "best" means
 # for the same trial, so v10 trials are not comparable to v11 trials.
+#
+# v12: 'density'/'shape' targets now predict log-spectral-energy directly
+# (log E(f) / log E(f)/m0) instead of a Softplus-activated non-negative
+# linear value — see nn/transformer.py's predictor construction, and the
+# log-space transform applied to y_batch in nn/training_loop.py/nn/evaluate.py
+# (utils/log_transform.py::to_log_space). The training loss for these two
+# targets also switched from frequency-weighted RMSE to frequency-weighted
+# plain MSE, computed in log-space. This is an incompatible objective-function
+# change: v11 trials are not comparable to v12 trials. Two effects worth
+# flagging when actually running this study:
+#   - lr's search range (nn/optimization.py::objective(), currently
+#     1e-3-1.5e-2) was narrowed to bracket shape_v9's best trials under the
+#     OLD Softplus + physical-space-RMSE regime — same situation this file's
+#     own v10 comment already flagged for weight_decay after the Adam->AdamW
+#     switch. Consider widening it back out rather than assuming it still
+#     applies.
+#   - OBJECTIVE_METRIC choices derived from per_step_SS/overall_SS
+#     ('final_step_SS', 'weighted_mean_SS', 'overall_SS') are now computed in
+#     log-space for 'density'/'shape' and are NOT comparable to pre-v12 runs.
+#     'Hs_SS', 'Tm02_RMSE', and 'Shape_RMSE' are exp()'d back to physical
+#     units internally (nn/evaluate.py) and remain the fair basis for
+#     comparing this ablation against pre-v12 results.
 STUDY_VERSION = "v11"
 
 # Short slug used as the top-level folder under results/.
@@ -78,11 +100,17 @@ EXPERIMENT_DESCRIPTION = (
     "an average across autoregressive steps)."
     "Trains to predict spectral shape at 6h, 12h, 24h lead times."
     "Fixes RMSE weighting to use utils.trapz_weights instead of flat mean over log-spaced frequency grid."
-    "Adds padding_mode to convolutional frontend and enforce positivity with clamp (at inference) and softplus (at training)." \
+    "Adds padding_mode to convolutional frontend."
     "Includes r2 as new channel."
     "Switches optimizer to AdamW, narrows lr search range around shape_v9's best trials, and "
     "splits the single dropout hyperparameter into freq_embed_dropout and embed_dropout (the "
     "latter now also drives nn.Transformer's own internal dropout, previously unwired)."
+    "metric computed only on lead time step of interest, not averaged across autoregressive steps."
+    "v11: predicts log-spectral-energy (log E(f)/m0) directly via a plain "
+    "Linear head instead of a Softplus-activated linear value; loss switched "
+    "to frequency-weighted plain MSE in log-space; non-negativity of the "
+    "physical shape now comes from exp() at inference/metric time instead of "
+    "an architectural Softplus constraint."
 )
 
 # Set parameters

@@ -3,13 +3,26 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from torchmetrics.functional import pearson_corrcoef
-from utils import RMSELoss, get_start_token, compute_bulk_params, trapz_weights
+from utils import RMSELoss, get_start_token, compute_bulk_params, trapz_weights, to_log_space
 
 
 def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
-             freq_means=None, return_arrays=False):
+             freq_means=None, shape_means=None, return_arrays=False):
     """
     Evaluate model using autoregressive inference.
+
+    NOTE on log-space (density/shape targets): y_batch, model.infer()'s
+    output, and the persistence baseline are all in log-spectral-energy
+    space for 'density' (log E(f)) / 'shape' (log E(f)/m0) targets — see
+    nn/training_loop.py for why this must be applied to the entire y_batch
+    tensor, not just at loss time. Consequently every metric below that
+    operates directly on y_pred_all/y_true_all/y_pers_all without an
+    explicit exp() — i.e. the top-level 'RMSE', 'CC', 'Bias', 'R2',
+    'per_step_*', 'overall_SS' — is computed in log-space for these two
+    targets, and is NOT comparable to pre-ablation runs (where these were
+    physical/normalised-space). The bulk-parameter block below (Hs/Tm02/
+    Shape/SI) explicitly exp()'s back to physical units and remains
+    comparable across the ablation.
 
     Persistence baseline: predict that every future step equals the last
     observed value at the end of the encoder window (i.e. the start token).
@@ -228,18 +241,31 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             aux = aux.to(device)
             y_batch = y_batch.to(device)
 
+            # Convert to log-spectral-energy space, matching train_one_epoch
+            # — see the NOTE in this function's docstring.
+            if model.target == 'density':
+                if freq_means is None:
+                    raise ValueError("freq_means is required for target='density'")
+                fm = freq_means.to(device)
+                y_batch = to_log_space(y_batch * fm, fm)
+            elif model.target == 'shape':
+                if shape_means is None:
+                    raise ValueError("shape_means is required for target='shape'")
+                y_batch = to_log_space(y_batch, shape_means.to(device))
+
             # Persistence forecast: last observed value broadcast over all steps
             # get_start_token returns shape (batch, 1) for hs or (batch, num_freqs) for
             # density/shape. freq_means must be forwarded here (not just to model.infer()
             # below) so the hs/shape persistence baseline is denormalised the same way the
             # model's own predictions are — otherwise the SS denominator is wrong.
             start_token = get_start_token(src, model.target, freqs, device,
-                                          freq_means=freq_means)
+                                          freq_means=freq_means, shape_means=shape_means)
             # shape → (batch, 1, output_dim) → (batch, lead_time, output_dim)
             persistence = start_token.unsqueeze(1).expand(-1, y_batch.shape[1], -1)
 
             # Autoregressive model inference — no ground truth in decoder
-            y_pred = model.infer(src, freqs, lead_time, freq_means=freq_means, aux=aux)
+            y_pred = model.infer(src, freqs, lead_time, freq_means=freq_means,
+                                 shape_means=shape_means, aux=aux)
 
             all_preds.append(y_pred.cpu())
             all_targets.append(y_batch.cpu())
@@ -313,12 +339,12 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     bulk = {}
     if model.target == 'density' and freqs is not None and freq_means is not None:
         freqs_np = freqs.cpu().numpy()                        # (num_freqs,)
-        fm_np    = freq_means.cpu().numpy()                   # (num_freqs,)
         freq_w   = trapz_weights(freqs_np)                    # (num_freqs,), sums to 1
 
-        # Denormalise: E_phys = Ẽ * μ(f);  shape (batch, lead_time, num_freqs)
-        pred_np = y_pred_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
-        true_np = y_true_all.numpy() * fm_np[np.newaxis, np.newaxis, :]
+        # Recover physical E(f): y_pred_all/y_true_all are log-spectral-energy
+        # (see docstring NOTE); shape (batch, lead_time, num_freqs)
+        pred_np = np.exp(y_pred_all.numpy())
+        true_np = np.exp(y_true_all.numpy())
 
         # Restrict every bulk/shape/SI metric below to the FINAL forecast step
         # only (the actual chosen lead time) rather than pooling across all
@@ -345,7 +371,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
         # Hs Skill Score: normalise model RMSE against persistence Hs RMSE so
         # the metric is robust to seq_len variation across Optuna trials.
-        pers_np      = (y_pers_all.numpy() * fm_np[np.newaxis, np.newaxis, :])[:, -1:, :]
+        pers_np      = np.exp(y_pers_all.numpy())[:, -1:, :]
         hs_pers, _   = compute_bulk_params(pers_np, freqs_np)
         hs_rmse_pers = float(np.sqrt(np.mean((hs_pers - hs_true) ** 2)))
         hs_rmse_model = float(np.sqrt(np.mean(hs_err ** 2)))
@@ -413,18 +439,34 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
     if model.target == 'shape' and freqs is not None:
         freqs_np = freqs.cpu().numpy()
+
+        # y_pred_all/y_true_all/y_pers_all are log-shape (see docstring
+        # NOTE) — exp() back to linear unit-area shape before any physical
+        # computation. Shape_RMSE/Shape_SS can no longer alias
+        # per_step_rmse[-1]/per_step_ss[-1] (those are now log-space); they
+        # must be recomputed here in physical space to stay comparable to
+        # the 'density' target's (also physical) Shape_RMSE/Shape_SS above.
+        pred_final = torch.exp(y_pred_all[:, -1, :])
+        true_final = torch.exp(y_true_all[:, -1, :])
+        pers_final = torch.exp(y_pers_all[:, -1, :])
+
+        shape_rmse_model = rmse_fn(pred_final, true_final, weights=freq_weights).item()
+        shape_rmse_pers  = rmse_fn(pers_final, true_final, weights=freq_weights).item()
+        shape_ss = (1.0 - shape_rmse_model / shape_rmse_pers
+                    if shape_rmse_pers > 0 else float('nan'))
+
         # Mass-conservation diagnostic: model.infer() already renormalizes
-        # each predicted step to unit area, so this should be ~0 — see the
+        # each predicted step to unit area (in linear space, before
+        # converting back to log-space for the next decode step — see
+        # nn/transformer.py::infer()), so this should be ~0 — see the
         # 'Shape_Mass_Error' docstring entry above. Deliberately NOT restricted
-        # to the final step (unlike Shape_RMSE/Shape_SS below) — it's a
+        # to the final step (unlike Shape_RMSE/Shape_SS above) — it's a
         # sanity check for a renormalization regression at ANY step, not a
         # lead-time performance metric.
-        mass = np.trapezoid(y_pred_all.numpy(), freqs_np, axis=2)  # (batch, lead_time)
+        mass = np.trapezoid(torch.exp(y_pred_all).numpy(), freqs_np, axis=2)  # (batch, lead_time)
         bulk = {
-            # Final forecast step only, matching per_step_rmse/per_step_ss's
-            # role elsewhere — not the all-step-pooled 'rmse'/'overall_ss'.
-            'Shape_RMSE'      : per_step_rmse[-1],
-            'Shape_SS'        : per_step_ss[-1],
+            'Shape_RMSE'      : shape_rmse_model,
+            'Shape_SS'        : shape_ss,
             'Shape_Mass_Error': float(np.mean(np.abs(mass - 1.0))),
         }
 

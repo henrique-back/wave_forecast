@@ -17,14 +17,19 @@ FREQS = np.array([0.05, 0.10, 0.15, 0.20, 0.30], dtype=np.float32)
 
 
 class TestShapeInferRenormalization:
-    """infer()'s 'shape' branch must rescale every decoded step so its own
-    trapezoidal integral over freqs is exactly 1"""
+    """infer()'s 'shape' branch decodes log-shape, exp()'s it back to linear
+    shape, rescales every step so its trapezoidal integral over freqs is
+    exactly 1, then converts back to log-space before returning/feeding the
+    next decode step — so every assertion here exp()'s the returned
+    sequence before checking mass."""
 
     def test_infer_shape_output_integrates_to_one(self):
         torch.manual_seed(0)
         freqs = torch.tensor(FREQS)
         num_freqs = len(FREQS)
         batch, seq_len, lead_time = 2, 5, 3
+        freq_means = torch.ones(num_freqs)
+        shape_means = torch.ones(num_freqs)
 
         model = WaveHeightBaselineNN(
             freqs=freqs,
@@ -38,41 +43,37 @@ class TestShapeInferRenormalization:
         )
         model.eval()
 
-        # Patch decode() to return a fixed, guaranteed-positive tensor. An
-        # untrained network's raw output isn't guaranteed positive, and a
-        # negative-integral step would trip infer()'s near-zero-mass clamp
-        # (matching utils/compute_hs.py::compute_shape's own clip
-        # convention) — that's a separate, expected edge case, not what
-        # this test is isolating. This test only checks infer()'s
-        # renormalization arithmetic given a well-behaved decoder output.
+        # decode() now returns log-shape, which is unconstrained — a plain
+        # randn is a perfectly well-behaved decoder output post-ablation,
+        # since infer() exp()'s it (always > 0) before the mass arithmetic.
         def fake_decode(tgt, memory):
             g = torch.Generator().manual_seed(123)
-            return torch.rand(tgt.size(0), tgt.size(1), num_freqs, generator=g) + 0.1
+            return torch.randn(tgt.size(0), tgt.size(1), num_freqs, generator=g)
 
         model.decode = fake_decode
 
         src = torch.rand(batch, seq_len, num_freqs, 1) + 0.1
-        output = model.infer(src, freqs, lead_time)
+        output = model.infer(src, freqs, lead_time, freq_means=freq_means, shape_means=shape_means)
 
         assert output.shape == (batch, lead_time, num_freqs)
-        mass = torch.trapezoid(output, freqs, dim=-1)  # (batch, lead_time)
+        shape_lin = torch.exp(output)
+        mass = torch.trapezoid(shape_lin, freqs, dim=-1)  # (batch, lead_time)
         assert torch.allclose(mass, torch.ones_like(mass), atol=1e-5), (
             f"Expected every predicted step to integrate to 1, got {mass}"
         )
 
-    def test_infer_shape_clamps_negative_bins_before_mass_rescale(self):
-        """Regression test: negative bins must be clamped to zero BEFORE the
-        trapezoidal mass is computed, not after. Dividing by the raw
-        (signed) integral lets negative bins eat into the total mass,
-        inflating the rescale factor applied to every bin — including the
-        correctly-signed positive ones — so the whole spectrum gets
-        distorted by sign-cancellation, not just the negative bins
-        themselves. infer() must instead clamp first, so the mass reflects
-        only the real positive content."""
+    def test_infer_shape_rescale_matches_manual_computation(self):
+        """Regression test: infer() must exp() the raw log-shape decode()
+        output, rescale by the resulting linear-space mass, then log() the
+        rescaled result back before storing/returning it — not skip the
+        round-trip, and not rescale in log-space directly (which would be
+        mathematically wrong: log(a/b) != log(a)/b)."""
         torch.manual_seed(0)
         freqs = torch.tensor(FREQS)
         num_freqs = len(FREQS)
         batch, seq_len, lead_time = 1, 3, 1
+        freq_means = torch.ones(num_freqs)
+        shape_means = torch.ones(num_freqs)
 
         model = WaveHeightBaselineNN(
             freqs=freqs,
@@ -86,8 +87,8 @@ class TestShapeInferRenormalization:
         )
         model.eval()
 
-        # Mixed-sign raw output: some real positive content, plus negative
-        # bins that would otherwise cancel part of that mass away.
+        # Mixed-sign raw log-shape output — perfectly valid now, since exp()
+        # recovers a strictly positive linear-space value regardless of sign.
         fixed_output = torch.tensor(
             [[[2.0, 3.0, -4.0, 1.0, -1.0]]]
         )  # matches len(FREQS) == 5
@@ -98,41 +99,34 @@ class TestShapeInferRenormalization:
         model.decode = fake_decode
 
         src = torch.rand(batch, seq_len, num_freqs, 1) + 0.1
-        output = model.infer(src, freqs, lead_time)
+        output = model.infer(src, freqs, lead_time, freq_means=freq_means, shape_means=shape_means)
 
-        assert (output >= 0).all(), f"expected no negative bins in output, got {output}"
-        mass = torch.trapezoid(output, freqs, dim=-1)
+        shape_lin = torch.exp(output)
+        assert (shape_lin > 0).all(), f"expected strictly positive shape, got {shape_lin}"
+        mass = torch.trapezoid(shape_lin, freqs, dim=-1)
         assert torch.allclose(mass, torch.ones_like(mass), atol=1e-5), (
-            f"Expected output to still integrate to 1, got {mass}"
+            f"Expected output to integrate to 1, got {mass}"
         )
 
-        # The correct rescale clamps first, then divides by the CLAMPED
-        # mass — not the naive (and wrong) raw/raw_mass.
-        clamped = fixed_output.clamp(min=0.0)
-        clamped_mass = torch.trapezoid(clamped[0, 0], freqs)
-        expected = clamped / clamped_mass
-        assert torch.allclose(output[0, 0], expected[0, 0], atol=1e-4)
+        # Manual reference: exp -> mass -> rescale (all in linear space).
+        linear = torch.exp(fixed_output[0, 0])
+        linear_mass = torch.trapezoid(linear, freqs)
+        expected_linear = linear / linear_mass
+        assert torch.allclose(shape_lin[0, 0], expected_linear, atol=1e-4)
 
-        # Sanity check that this genuinely differs from the old (buggy)
-        # raw/raw_mass behavior for this input — otherwise the test above
-        # wouldn't actually be distinguishing the two implementations.
-        raw_mass = torch.trapezoid(fixed_output[0, 0], freqs)
-        naive_wrong = fixed_output[0, 0] / raw_mass
-        assert not torch.allclose(output[0, 0], naive_wrong, atol=1e-3)
-
-    def test_infer_shape_falls_back_to_flat_when_all_bins_negative(self):
-        """Degenerate edge case: if every bin in a step's raw output is
-        negative, clamping makes the whole vector zero and there's no
-        positive mass left to rescale by. Falling back to the discarded
-        negative values (dividing by their own negative mass, as a previous
-        implementation did) would just reintroduce the sign-cancellation
-        the clamp exists to remove — infer() must fall back to a flat
-        (uniform) unit-area distribution instead, preserving the
-        integrates-to-1 invariant without fabricating any shape claim."""
+    def test_infer_shape_falls_back_to_flat_on_underflow(self):
+        """Degenerate edge case: if the raw log-shape output is very
+        negative for every bin, exp() underflows to (near-)zero across the
+        board and there's no positive mass left to rescale by. infer() must
+        fall back to a flat (uniform) unit-area distribution instead of
+        dividing by ~0, preserving the integrates-to-1 invariant without
+        fabricating any shape claim."""
         torch.manual_seed(0)
         freqs = torch.tensor(FREQS)
         num_freqs = len(FREQS)
         batch, seq_len, lead_time = 1, 3, 2
+        freq_means = torch.ones(num_freqs)
+        shape_means = torch.ones(num_freqs)
 
         model = WaveHeightBaselineNN(
             freqs=freqs,
@@ -146,7 +140,8 @@ class TestShapeInferRenormalization:
         )
         model.eval()
 
-        fixed_output = -torch.linspace(0.1, 1.0, num_freqs).view(1, 1, num_freqs)
+        # exp(-1000) underflows to exactly 0.0 in float32.
+        fixed_output = torch.full((1, 1, num_freqs), -1000.0)
 
         def fake_decode(tgt, memory):
             return fixed_output.expand(tgt.size(0), tgt.size(1), num_freqs)
@@ -154,22 +149,25 @@ class TestShapeInferRenormalization:
         model.decode = fake_decode
 
         src = torch.rand(batch, seq_len, num_freqs, 1) + 0.1
-        output = model.infer(src, freqs, lead_time)
+        output = model.infer(src, freqs, lead_time, freq_means=freq_means, shape_means=shape_means)
 
-        assert (output >= 0).all(), f"expected no negative bins in output, got {output}"
-        mass = torch.trapezoid(output, freqs, dim=-1)
+        shape_lin = torch.exp(output)
+        assert (shape_lin >= 0).all(), f"expected no negative bins, got {shape_lin}"
+        mass = torch.trapezoid(shape_lin, freqs, dim=-1)
         assert torch.allclose(mass, torch.ones_like(mass), atol=1e-5), (
             f"Expected the flat fallback to integrate to 1, got {mass}"
         )
         flat_value = 1.0 / (freqs[-1] - freqs[0])
-        assert torch.allclose(output, flat_value.expand_as(output), atol=1e-5)
+        assert torch.allclose(shape_lin, flat_value.expand_as(shape_lin), atol=1e-5)
 
 
-class TestPredictorNonNegativity:
-    """density/shape predict a physical spectral energy density, which is
-    never negative — the predictor head must be architecturally incapable
-    of outputting negative energy (Softplus), not just discouraged from it
-    by the loss. 'hs' has no such requirement and keeps a plain Linear."""
+class TestPredictorArchitecture:
+    """density/shape now predict log-spectral-energy (log E(f) or
+    log E(f)/m0) rather than the physical value directly — non-negativity
+    of the physical quantity is guaranteed for free by exp() at the point
+    of use, so the predictor head is a plain Linear for all three targets,
+    same as 'hs' always was, and decode() output is unconstrained (can be
+    negative) for every target."""
 
     def _build(self, target):
         torch.manual_seed(0)
@@ -185,45 +183,30 @@ class TestPredictorNonNegativity:
             embed_dim=8,
         )
 
-    def test_density_and_shape_predictor_end_in_softplus(self):
-        for target in ("density", "shape"):
+    def test_all_targets_use_plain_linear_predictor(self):
+        for target in ("hs", "density", "shape"):
             model = self._build(target)
-            assert isinstance(model.predictor, torch.nn.Sequential)
-            assert isinstance(model.predictor[-1], torch.nn.Softplus)
+            assert isinstance(model.predictor, torch.nn.Linear), (
+                f"expected plain Linear predictor for target={target!r}, "
+                f"got {type(model.predictor)}"
+            )
 
-    def test_hs_predictor_stays_plain_linear(self):
-        model = self._build("hs")
-        assert isinstance(model.predictor, torch.nn.Linear)
-
-    def test_density_and_shape_decode_output_always_positive(self):
-        """Must hold with zero training — an architectural property of
-        Softplus, not something the model has to learn."""
+    def test_decode_output_can_be_negative_for_every_target(self):
+        """Sanity check that no target's decode() output is architecturally
+        constrained to be positive — otherwise this contrast wouldn't be
+        testing anything."""
         num_freqs = len(FREQS)
-        batch, seq_len, tgt_len = 2, 4, 3
-        for target in ("density", "shape"):
+        batch, seq_len, tgt_len = 8, 4, 5
+        for target in ("hs", "density", "shape"):
             model = self._build(target)
             model.eval()
             src = torch.randn(batch, seq_len, num_freqs, 1)
-            tgt = torch.randn(batch, tgt_len, num_freqs)
+            tgt_width = 1 if target == "hs" else num_freqs
+            tgt = torch.randn(batch, tgt_len, tgt_width)
             memory = model.encode(src)
             output = model.decode(tgt, memory)
-            assert (output > 0).all(), (
-                f"expected strictly positive output for target={target!r}, "
-                f"got min={output.min().item()}"
+            assert (output < 0).any(), (
+                f"expected at least one negative value from an unconstrained "
+                f"random-init Linear head for target={target!r} over this "
+                f"many samples"
             )
-
-    def test_hs_decode_output_can_be_negative(self):
-        """Sanity check that the 'hs' branch is genuinely unconstrained —
-        otherwise the contrast above wouldn't be testing anything."""
-        model = self._build("hs")
-        model.eval()
-        num_freqs = len(FREQS)
-        batch, seq_len, tgt_len = 8, 4, 5
-        src = torch.randn(batch, seq_len, num_freqs, 1)
-        tgt = torch.randn(batch, tgt_len, 1)
-        memory = model.encode(src)
-        output = model.decode(tgt, memory)
-        assert (output < 0).any(), (
-            "expected at least one negative value from an unconstrained "
-            "random-init Linear head over this many samples"
-        )

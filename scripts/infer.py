@@ -317,12 +317,13 @@ def run_single(
     )
     model = build_model(ckpt, freqs, device, args.channel_set, args.aux_set)
     freq_means = ckpt["freq_means"].to(device)
+    shape_means = ckpt["shape_means"].to(device) if ckpt.get("shape_means") is not None else None
     lead_time_steps = ckpt["lead_time_steps"]
     params = ckpt["params"]
 
     # shuffle_seed only affects the (unused) train_loader's shuffle order —
     # the test split itself is deterministic and never shuffled.
-    _, _, test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density,
         alpha_1,
         alpha_2,
@@ -353,6 +354,7 @@ def run_single(
             freqs,
             lead_time=lead_time_steps,
             freq_means=freq_means,
+            shape_means=shape_means,
             return_arrays=True,
         )
         print(
@@ -360,11 +362,13 @@ def run_single(
             f"Shape_SS={agg_metrics['Shape_SS']:.4f}  "
             f"Shape_Mass_Error={agg_metrics['Shape_Mass_Error']:.6f}"
         )
+        # evaluate()'s returned arrays are log-shape for target=='shape'
+        # (see its docstring NOTE) — exp() back to linear before plotting.
         fig = plot_shape_test_set_summary(
             freqs_np,
-            y_pred_all.numpy(),
-            y_true_all.numpy(),
-            y_pers_all.numpy(),
+            np.exp(y_pred_all.numpy()),
+            np.exp(y_true_all.numpy()),
+            np.exp(y_pers_all.numpy()),
             args.agg_step,
         )
         if args.save:
@@ -390,6 +394,7 @@ def run_single(
             freqs,
             lead_time=lead_time_steps,
             freq_means=freq_means,
+            shape_means=shape_means,
         )
         save_metrics_json(
             project_root,
@@ -415,18 +420,22 @@ def run_single(
             y_true = y_true.unsqueeze(0).to(device)
 
             y_pred = model.infer(
-                X, freqs, lead_time_steps, freq_means=freq_means, aux=aux
+                X, freqs, lead_time_steps, freq_means=freq_means,
+                shape_means=shape_means, aux=aux
             )
             start_token = get_start_token(
-                X, args.target, freqs, device, freq_means=freq_means
+                X, args.target, freqs, device, freq_means=freq_means,
+                shape_means=shape_means
             )
             persistence = start_token.unsqueeze(1).expand(-1, y_true.shape[1], -1)
 
             if args.target == "density":
                 fm = freq_means.cpu().numpy()
-                pred_phys = y_pred.cpu().numpy()[0] * fm
+                # y_pred/persistence are log-spectral-energy; y_true is the
+                # raw dataset ground truth (still Ẽ = E/μ(f), unaffected).
+                pred_phys = np.exp(y_pred.cpu().numpy()[0])
                 true_phys = y_true.cpu().numpy()[0] * fm
-                pers_phys = persistence.cpu().numpy()[0] * fm
+                pers_phys = np.exp(persistence.cpu().numpy()[0])
 
                 hs_pred, tm02_pred = compute_bulk_params(
                     pred_phys[np.newaxis], freqs_np
@@ -467,9 +476,12 @@ def run_single(
                 )
 
             elif args.target == "shape":
-                pred_shape = y_pred.cpu().numpy()[0]
+                # y_pred/persistence are log-shape; y_true is the raw
+                # dataset ground truth (already physical unit-area shape,
+                # per prepare_y — unaffected by the ablation).
+                pred_shape = np.exp(y_pred.cpu().numpy()[0])
                 true_shape = y_true.cpu().numpy()[0]
-                pers_shape = persistence.cpu().numpy()[0]
+                pers_shape = np.exp(persistence.cpu().numpy()[0])
 
                 n_snap = min(args.n_steps, lead_time_steps)
                 steps = sorted(
@@ -526,6 +538,7 @@ def run_combined(
     shape_model = build_model(shape_ckpt, freqs, device, args.channel_set, args.aux_set)
     hs_freq_means = hs_ckpt["freq_means"].to(device)
     shape_freq_means = shape_ckpt["freq_means"].to(device)
+    shape_means = shape_ckpt["shape_means"].to(device)
     hs_params = hs_ckpt["params"]
     shape_params = shape_ckpt["params"]
 
@@ -533,7 +546,7 @@ def run_combined(
     # is an independently tuned hyperparameter per target (here hs=48, shape=12
     # for the 6h study), so the two test datasets are windowed differently and
     # dataset index i does NOT refer to the same forecast time in both.
-    _, _, hs_test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, hs_test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density,
         alpha_1,
         alpha_2,
@@ -548,7 +561,7 @@ def run_combined(
         channel_set=args.channel_set,
         aux_set=args.aux_set,
     )
-    _, _, shape_test_loader, _, _, _, _ = _prepare_dataloaders(
+    _, _, shape_test_loader, _, _, _, _, _ = _prepare_dataloaders(
         density,
         alpha_1,
         alpha_2,
@@ -651,10 +664,12 @@ def run_combined(
                 freqs,
                 lead_time_steps,
                 freq_means=shape_freq_means,
+                shape_means=shape_means,
                 aux=aux_shape,
-            )  # (1, L, F) unit-area
+            )  # (1, L, F) log unit-area shape
 
-            shape_pred_np = shape_pred.cpu().numpy()[0]  # (L, F)
+            # exp() back to linear unit-area shape before recombining with m0.
+            shape_pred_np = np.exp(shape_pred.cpu().numpy()[0])  # (L, F)
             m0_pred = ((hs_pred / 4.0) ** 2).cpu().numpy()[0]  # (L, 1)
             pred_phys = shape_pred_np * m0_pred  # (L, F)
 

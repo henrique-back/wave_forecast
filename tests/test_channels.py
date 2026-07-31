@@ -120,5 +120,7 @@ class TestModelWithAux:
         out = model(src, tgt, aux=aux)
         assert out.shape == (batch, lead_time, num_freqs)
 
-        inferred = model.infer(src, torch.tensor(FREQS), lead_time, aux=aux)
+        freq_means = torch.ones(num_freqs)
+        inferred = model.infer(src, torch.tensor(FREQS), lead_time,
+                               freq_means=freq_means, aux=aux)
         assert inferred.shape == (batch, lead_time, num_freqs)

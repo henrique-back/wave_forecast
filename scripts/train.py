@@ -149,6 +149,7 @@ def main():
                 val_loader,
                 test_loader,
                 freq_means,
+                shape_means,
                 num_freqs,
                 num_channels,
                 num_aux_channels,
@@ -189,6 +190,7 @@ def main():
                 device,
                 freqs,
                 freq_means,
+                shape_means,
                 target,
                 lead_time_steps,
                 params["lr"],
@@ -209,6 +211,7 @@ def main():
                 freqs,
                 lead_time=lead_time_steps,
                 freq_means=freq_means,
+                shape_means=shape_means,
             )
             print(
                 f"Seed {seed} — best val {OBJECTIVE_METRIC}: {best_val_score:.4f} | "
@@ -229,6 +232,7 @@ def main():
                     "lead_time_hours": lead_time_hours,
                     "seed": seed,
                     "freq_means": freq_means,
+                    "shape_means": shape_means,
                     "freqs": freqs,
                 },
                 checkpoint_path,

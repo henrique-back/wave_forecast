@@ -2,6 +2,7 @@ from .read_txt import read_txt
 from .add_datetime_index import add_datetime_index
 from .check_time import check_time
 from .compute_hs import compute_hs_from_density as compute_hs, compute_bulk_params, compute_shape, trapz_weights
+from .log_transform import to_log_space, LOG_FLOOR_FRACTION
 from .set_seed import set_seed
 from .get_start_token import get_start_token
 from .get_freqs import get_freqs

@@ -1,23 +1,37 @@
-from utils import get_start_token, RMSELoss, trapz_weights
+from utils import get_start_token, RMSELoss, trapz_weights, to_log_space
 import torch
 from tqdm import tqdm
 
 
 def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
-                    tf_ratio=1.0, freq_means=None):
+                    tf_ratio=1.0, freq_means=None, shape_means=None):
     """Train for one epoch and return {'RMSE': avg_loss}.
+
+    avg_loss is the mean per-sample training loss actually optimised: RMSE
+    for 'hs', but plain MSE in log-space for 'density'/'shape' (see the
+    loss computation below) — the dict key is kept as 'RMSE' for logging/
+    call-site compatibility, but for density/shape this value is not on the
+    same scale as pre-ablation runs or as evaluate()'s reported 'RMSE'.
 
     Parameters
     ----------
     freq_means : torch.Tensor | None, shape (num_freqs,)
-        Per-frequency training mean μ(f).  When provided:
-        - For 'hs' target  : passed to get_start_token so the decoder start
-          token is in physical metres (E = Ẽ * μ(f) before integration).
-        - For 'density' target : loss is computed in physical space by
-          denormalising both prediction and target before RMSE, i.e.
-          loss = RMSE(ŷ * μ(f), y * μ(f)).  This prevents the loss from
-          being dominated by the normalisation artefact.
-        If None, falls back to normalised-space loss (old behaviour).
+        Per-frequency training mean μ(f) of the physical density. When
+        provided:
+        - For 'hs' target      : passed to get_start_token so the decoder
+          start token is in physical metres (E = Ẽ * μ(f) before
+          integration).
+        - For 'density' target : y_batch is converted to log-spectral-energy
+          — log(Ẽ * μ(f)), floored per utils.to_log_space — immediately
+          after load, before it's used to build the decoder input or the
+          loss target. The model now predicts this log-space quantity
+          directly, so both the teacher-forced decoder input and the
+          scheduled-sampling self-feedback loop below operate consistently
+          in log-space with no further special-casing.
+    shape_means : torch.Tensor | None, shape (num_freqs,)
+        Per-frequency training mean of the physical unit-area shape target.
+        Required for target == 'shape': y_batch (already physical, per
+        prepare_y) is converted to log-space the same way as above.
 
     For 'density'/'shape' targets, the loss is additionally weighted across
     the frequency axis by utils.trapz_weights(freqs) — the grid is
@@ -46,8 +60,21 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         if model.target == 'hs' and y_batch.dim() == 2:
             y_batch = y_batch.unsqueeze(-1)
 
+        # Convert y_batch to log-spectral-energy space immediately after
+        # load, before it's used anywhere downstream (decoder input
+        # construction, scheduled sampling, loss) — see docstring above.
+        if model.target == 'density':
+            if freq_means is None:
+                raise ValueError("freq_means is required for target='density'")
+            fm = freq_means.to(device)
+            y_batch = to_log_space(y_batch * fm, fm)
+        elif model.target == 'shape':
+            if shape_means is None:
+                raise ValueError("shape_means is required for target='shape'")
+            y_batch = to_log_space(y_batch, shape_means.to(device))
+
         start_token = get_start_token(src, model.target, freqs, device,
-                                      freq_means=freq_means)
+                                      freq_means=freq_means, shape_means=shape_means)
 
         if tf_ratio >= 1.0:
             # Pure teacher forcing: decoder always receives the ground-truth
@@ -92,16 +119,14 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
 
             y_pred = torch.cat(all_preds, dim=1)  # (batch, lead_time, output_dim)
 
-        # Compute loss in physical space for the density target:
-        # denormalise E = Ẽ * μ(f) before RMSE so that the gradient signal
-        # reflects actual spectral energy magnitudes (m² Hz⁻¹), not
-        # normalised units.  For the Hs target the predictions and targets
-        # are already in physical metres (see prepare_y and get_start_token).
-        if model.target == 'density' and freq_means is not None:
-            fm = freq_means.to(device)          # (num_freqs,)
-            loss = loss_fn(y_pred * fm, y_batch * fm, weights=freq_weights)
-        else:
-            loss = loss_fn(y_pred, y_batch, weights=freq_weights)
+        # 'density'/'shape' targets: plain MSE (no sqrt) directly on y_pred
+        # vs y_batch, both in log-space — y_batch was already converted to
+        # log-spectral-energy above, and the model predicts that same
+        # log-space quantity directly, so no further denormalisation is
+        # needed here. 'hs': unchanged RMSE on physical metres (see
+        # prepare_y and get_start_token).
+        squared = model.target in ('density', 'shape')
+        loss = loss_fn(y_pred, y_batch, weights=freq_weights, squared=squared)
 
         optimizer.zero_grad()
         loss.backward()
