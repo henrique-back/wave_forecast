@@ -1,10 +1,11 @@
-from utils import get_start_token, RMSELoss, trapz_weights, to_log_space
+from utils import get_start_token, RMSELoss, trapz_weights, to_log_space, SpectralWassersteinLoss
 import torch
 from tqdm import tqdm
 
 
 def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
-                    tf_ratio=1.0, freq_means=None, shape_means=None):
+                    tf_ratio=1.0, freq_means=None, shape_means=None,
+                    wasserstein_loss_weight=0.0):
     """Train for one epoch and return {'RMSE': avg_loss}.
 
     avg_loss is the mean per-sample training loss actually optimised: RMSE
@@ -32,6 +33,16 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         Per-frequency training mean of the physical unit-area shape target.
         Required for target == 'shape': y_batch (already physical, per
         prepare_y) is converted to log-space the same way as above.
+    wasserstein_loss_weight : float
+        target == 'shape' only. Default 0.0 (no behavior change). When > 0,
+        adds wasserstein_loss_weight * utils.SpectralWassersteinLoss(y_pred,
+        y_batch, freqs) to the main per-bin loss — the 1-D earth-mover
+        distance between predicted and true spectra (exact via CDF L1
+        distance, see utils/loss.py). Unlike the main per-bin loss, W1 is
+        forgiving of small peak-position shifts while still penalizing a
+        blurred/flattened prediction relative to a sharp true spectrum —
+        aimed at the same multimodal-blur problem as the (reverted)
+        SpectralSlopeLoss experiment, via a different mechanism.
 
     For 'density'/'shape' targets, the loss is additionally weighted across
     the frequency axis by utils.trapz_weights(freqs) — the grid is
@@ -43,6 +54,7 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
     model.train()
     total_loss = 0.0
     loss_fn = RMSELoss()
+    wasserstein_loss_fn = SpectralWassersteinLoss()
 
     freq_weights = None
     if model.target in ('density', 'shape') and freqs is not None:
@@ -127,6 +139,9 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         # prepare_y and get_start_token).
         squared = model.target in ('density', 'shape')
         loss = loss_fn(y_pred, y_batch, weights=freq_weights, squared=squared)
+
+        if model.target == 'shape' and wasserstein_loss_weight > 0:
+            loss = loss + wasserstein_loss_weight * wasserstein_loss_fn(y_pred, y_batch, freqs)
 
         optimizer.zero_grad()
         loss.backward()

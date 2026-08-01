@@ -3,11 +3,13 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from torchmetrics.functional import pearson_corrcoef
-from utils import RMSELoss, get_start_token, compute_bulk_params, trapz_weights, to_log_space
+from utils import (RMSELoss, get_start_token, compute_bulk_params, trapz_weights,
+                   to_log_space, peak_modality_metrics, SpectralWassersteinLoss)
 
 
 def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
-             freq_means=None, shape_means=None, return_arrays=False):
+             freq_means=None, shape_means=None, return_arrays=False,
+             compute_peak_metrics=False):
     """
     Evaluate model using autoregressive inference.
 
@@ -48,6 +50,14 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                    metrics dict, as (metrics, arrays). Lets callers (e.g. an
                    aggregate test-set plot) reuse this function's single
                    autoregressive inference pass instead of re-running it.
+    - compute_peak_metrics : bool, target == 'shape' only. Default False —
+                   this function is called every epoch of every Optuna trial
+                   (nn/optimization.py) plus once per test split per trial/
+                   seed, so the extra per-sample peak-detection pass (see
+                   'Peak-aware multimodal metrics' below) is opt-in rather
+                   than unconditional, to keep the hyperparameter search's
+                   hot path at zero added cost. Set True for one-shot
+                   post-hoc analysis (scripts/infer.py --save-metrics).
 
     Returns dict with keys:
         'RMSE'               : overall RMSE (all steps, all samples). For
@@ -154,6 +164,22 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                step's shape-space Skill Score vs the
                                last-observed-shape persistence baseline, NOT
                                the all-step-pooled top-level 'overall_SS'.
+        'Shape_Wasserstein'  : float, 1-D Wasserstein (earth-mover) distance
+                               between predicted and true final-step shape —
+                               see utils.SpectralWassersteinLoss. Exact via
+                               the CDF-L1 closed form (no OT solver/critic
+                               network needed for a 1-D distribution). Each
+                               spectrum is normalized by its own mass before
+                               comparison, so this isolates shape error from
+                               magnitude error (already tracked separately
+                               by 'Shape_Mass_Error' below). Unlike
+                               'Shape_RMSE', forgiving of small peak-position
+                               shifts while still penalizing a blurred/
+                               flattened prediction — complementary read on
+                               the same multimodal-blur question the peak
+                               metrics below address. Cheap pure tensor math,
+                               so always computed (no opt-in flag, unlike the
+                               peak metrics' scipy loop below).
         'Shape_Mass_Error'   : float, mean absolute deviation of
                                ∫S_pred(f) df from 1 across all (sample, step)
                                pairs — deliberately NOT final-step-only, since
@@ -164,6 +190,46 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                so this should be ~0; a nonzero value here
                                would indicate infer()'s renormalization isn't
                                being hit (e.g. a stale checkpoint/code path).
+
+    Peak-aware multimodal metrics (target == 'shape', compute_peak_metrics=True only)
+    -------------------------------------------------------------------------------
+    A whole-spectrum frequency-weighted RMSE dilutes errors confined to a
+    narrow peak (1-2 of 47 bins) almost to invisibility — a model that
+    blurs two distinct swell/wind-sea peaks into one smoothed, lower hump
+    can show a similar or even BETTER 'Shape_RMSE' than a genuinely
+    unimodal sample, since most of the trapz-weighted mass sits in the
+    (correctly predicted) shoulders/tail. These metrics use
+    utils.peak_modality_metrics (scipy.signal.find_peaks under the hood,
+    prominence relative to each spectrum's own max) to surface that failure
+    mode directly, using the FINAL forecast step only:
+        'Peak_Count_True_Mean' : float, mean number of detected peaks in the
+                               true spectrum. Compare against
+                               'Peak_Count_Pred_Mean' — a model that
+                               over-smooths its output will show a
+                               noticeably lower predicted count.
+        'Peak_Count_Pred_Mean' : float, same, on the model's prediction.
+        'Peak_Height_RelError' : float, mean relative error between
+                               predicted and true energy AT each true
+                               peak's frequency bin, pooled over every
+                               peak across every sample — deliberately not
+                               gated on the model having its own detected
+                               peak there, so a fully blurred secondary
+                               peak still counts against this number.
+        'Peak_Separation_Recall': float, fraction of true peaks that have a
+                               model-detected peak within a few bins of
+                               them — the direct "does the model actually
+                               separate the peaks" number; 1.0 only if
+                               every true peak has a matching predicted one.
+        'Shape_unimodal_samples', 'Shape_multimodal_samples' : int, sample
+                               counts (true peak count == 1 vs >= 2).
+        'Shape_RMSE_unimodal', 'Shape_SS_unimodal',
+        'Shape_RMSE_multimodal', 'Shape_SS_multimodal' : float, the exact
+                               same 'Shape_RMSE'/'Shape_SS' computation
+                               above, just bucketed by whether the true
+                               final-step spectrum is unimodal or
+                               multimodal — lets 'is the model worse on
+                               multimodal seas' be read directly off the
+                               metrics instead of inferred from plots.
 
     Note on frequency weighting
     ----------------------------
@@ -455,6 +521,17 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         shape_ss = (1.0 - shape_rmse_model / shape_rmse_pers
                     if shape_rmse_pers > 0 else float('nan'))
 
+        # 1-D Wasserstein (earth-mover) distance between predicted and true
+        # final-step shape, via SpectralWassersteinLoss's exact CDF-L1
+        # formula — cheap pure tensor math (no scipy/Python loop, unlike the
+        # peak metrics below), so always computed, no opt-in flag needed.
+        # Takes the LOG-shape tensors directly (exponentiates internally) —
+        # NOT pred_final/true_final above, which are already physical.
+        wasserstein_fn = SpectralWassersteinLoss()
+        shape_wasserstein = wasserstein_fn(
+            y_pred_all[:, -1, :], y_true_all[:, -1, :], freqs
+        ).item()
+
         # Mass-conservation diagnostic: model.infer() already renormalizes
         # each predicted step to unit area (in linear space, before
         # converting back to log-space for the next decode step — see
@@ -465,10 +542,35 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         # lead-time performance metric.
         mass = np.trapezoid(torch.exp(y_pred_all).numpy(), freqs_np, axis=2)  # (batch, lead_time)
         bulk = {
-            'Shape_RMSE'      : shape_rmse_model,
-            'Shape_SS'        : shape_ss,
-            'Shape_Mass_Error': float(np.mean(np.abs(mass - 1.0))),
+            'Shape_RMSE'       : shape_rmse_model,
+            'Shape_SS'         : shape_ss,
+            'Shape_Wasserstein': shape_wasserstein,
+            'Shape_Mass_Error' : float(np.mean(np.abs(mass - 1.0))),
         }
+
+        if compute_peak_metrics:
+            peak_metrics, multimodal_mask = peak_modality_metrics(
+                pred_final.numpy(), true_final.numpy())
+            mask_t = torch.from_numpy(multimodal_mask)
+
+            def _bucket(mask):
+                if mask.sum() == 0:
+                    return float('nan'), float('nan')
+                r  = rmse_fn(pred_final[mask], true_final[mask], weights=freq_weights).item()
+                rp = rmse_fn(pers_final[mask], true_final[mask], weights=freq_weights).item()
+                return r, (1.0 - r / rp if rp > 0 else float('nan'))
+
+            rmse_uni, ss_uni     = _bucket(~mask_t)
+            rmse_multi, ss_multi = _bucket(mask_t)
+            bulk.update({
+                **peak_metrics,
+                'Shape_unimodal_samples'  : int((~multimodal_mask).sum()),
+                'Shape_multimodal_samples': int(multimodal_mask.sum()),
+                'Shape_RMSE_unimodal'     : rmse_uni,
+                'Shape_SS_unimodal'       : ss_uni,
+                'Shape_RMSE_multimodal'   : rmse_multi,
+                'Shape_SS_multimodal'     : ss_multi,
+            })
 
     metrics = {
         'RMSE'               : rmse,

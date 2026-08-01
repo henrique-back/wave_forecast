@@ -49,6 +49,83 @@ class RMSELoss(torch.nn.Module):
         return mse if squared else torch.sqrt(mse)
 
 
+def _cumulative_trapz(y, freqs):
+    """Cumulative trapezoidal integral of y over freqs, along the last axis.
+
+    Returns a tensor the same shape as y, where result[..., i] = the
+    trapezoidal integral of y from freqs[0] to freqs[i] (result[..., 0] == 0).
+    PyTorch has no built-in cumulative trapezoid (only whole-integral
+    torch.trapezoid), so this is a small manual implementation: cumsum of
+    each segment's trapezoid area, zero-prepended.
+    """
+    delta_f = freqs[1:] - freqs[:-1]  # (num_freqs-1,)
+    segment_areas = (y[..., 1:] + y[..., :-1]) / 2 * delta_f  # (..., num_freqs-1)
+    cum = torch.cumsum(segment_areas, dim=-1)
+    zeros = torch.zeros_like(cum[..., :1])
+    return torch.cat([zeros, cum], dim=-1)  # (..., num_freqs)
+
+
+class SpectralWassersteinLoss(torch.nn.Module):
+    """
+    1-D Wasserstein-1 (earth-mover) distance between predicted and true
+    spectra, treated as probability distributions over frequency — an
+    alternative to RMSELoss/SpectralSlopeLoss aimed at the same multimodal
+    blurring problem, but with a different, complementary property: W1 is
+    naturally forgiving of small position/phase shifts (a peak one bin off
+    costs a small, smoothly-scaling penalty) while still penalizing "flat
+    blur instead of two spikes" (moving mass from a spike to a spread-out
+    blob costs real transport distance, proportional to how far the mass
+    moved) — unlike a pointwise loss (RMSELoss, or SpectralSlopeLoss's
+    derivative variant), which penalizes a slightly shifted sharp peak
+    almost as harshly as a completely displaced one, since a shift produces
+    near-zero pointwise/derivative overlap at the peak location.
+
+    For 1-D distributions, W1 has an exact closed form: the L1 distance
+    between CDFs (∫|CDF_pred(f) - CDF_true(f)| df) — no optimal-transport
+    solver or learned critic network needed (that machinery, e.g. a WGAN's
+    critic, is only required to APPROXIMATE Wasserstein distance in high
+    dimensions; here the spectrum is a single 1-D curve over an ordered
+    frequency axis, so it's computed exactly and cheaply).
+
+    Each spectrum is normalized by its own total mass before building its
+    CDF — this compares pure SHAPE, decoupled from magnitude, by design:
+    mass conservation is already tracked separately (Shape_Mass_Error, and
+    model.infer()'s explicit renormalization), so a systematically
+    over/under-scaled prediction should not inflate this loss/metric on its
+    own — only genuine distributional (shape) mismatch should.
+    """
+
+    def forward(self, y_pred, y_true, freqs):
+        """
+        Parameters
+        ----------
+        y_pred, y_true : torch.Tensor, shape (..., num_freqs)
+            LOG-shape (this project's convention throughout
+            nn/training_loop.py) — exponentiated internally, since a CDF
+            requires actual non-negative mass, not log-values.
+        freqs : torch.Tensor, shape (num_freqs,)
+
+        Returns
+        -------
+        torch.Tensor, scalar — mean W1 distance over every (batch,
+        lead_time, ...) axis.
+        """
+        freqs = freqs.to(y_pred.device)
+        pred_phys = torch.exp(y_pred)
+        true_phys = torch.exp(y_true)
+
+        pred_mass = torch.trapezoid(pred_phys, freqs, dim=-1).clamp(min=1e-8)
+        true_mass = torch.trapezoid(true_phys, freqs, dim=-1).clamp(min=1e-8)
+        pred_norm = pred_phys / pred_mass.unsqueeze(-1)
+        true_norm = true_phys / true_mass.unsqueeze(-1)
+
+        cdf_pred = _cumulative_trapz(pred_norm, freqs)
+        cdf_true = _cumulative_trapz(true_norm, freqs)
+
+        w1 = torch.trapezoid(torch.abs(cdf_pred - cdf_true), freqs, dim=-1)
+        return w1.mean()
+
+
 class DirectionalLoss(torch.nn.Module):
     """Weighted composite loss over spectral density + directional wave
     parameters, per the meeting doc's Meta 3 proposal (2026-07-24 agenda):

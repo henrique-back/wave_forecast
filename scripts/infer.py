@@ -395,6 +395,7 @@ def run_single(
             lead_time=lead_time_steps,
             freq_means=freq_means,
             shape_means=shape_means,
+            compute_peak_metrics=(args.target == "shape"),
         )
         save_metrics_json(
             project_root,

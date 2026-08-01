@@ -13,7 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from utils.loss import DirectionalLoss, _FULL_CHANNELS
+from utils.loss import DirectionalLoss, SpectralWassersteinLoss, _FULL_CHANNELS
+from tests.test_spectral import FREQS as SPECTRAL_FREQS
 
 
 def _make_sample(density, alpha1_deg, alpha2_deg, r1, r2=0.5, num_freqs=4):
@@ -137,3 +138,102 @@ class TestDirectionalLossFreqWeighting:
         assert total.dim() == 0
         for v in components.values():
             assert v.dim() == 0
+
+
+def _spike(freqs_len, center_idx, height=10.0, floor=1e-3):
+    """A log-space single-bin spike (all other bins at `floor`) — a
+    convenient narrow synthetic 'peak' for testing position-shift behavior."""
+    x = np.full(freqs_len, floor)
+    x[center_idx] = height
+    return torch.log(torch.tensor(x, dtype=torch.float32))
+
+
+class TestSpectralWassersteinLoss:
+    """SpectralWassersteinLoss (nn/training_loop.py's Wasserstein-distance
+    auxiliary term / nn/evaluate.py's always-on 'Shape_Wasserstein' metric)
+    — the properties below are what distinguish it from a pointwise loss
+    like RMSELoss: forgiving of small position shifts, mass-scale invariant
+    (it compares shape, not magnitude)."""
+
+    def test_zero_for_identical_spectra(self):
+        loss_fn = SpectralWassersteinLoss()
+        true = _spike(len(SPECTRAL_FREQS), 20)
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        loss = loss_fn(true, true, freqs)
+        assert loss.item() == pytest.approx(0.0, abs=1e-5)
+
+    def test_mass_scale_invariant(self):
+        """Scaling a prediction by a constant factor (adding a constant in
+        log-space) must not change the loss — it compares normalized shape,
+        not magnitude, by design (mass error is tracked separately by
+        Shape_Mass_Error)."""
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        true = _spike(len(SPECTRAL_FREQS), 20)
+        pred = _spike(len(SPECTRAL_FREQS), 30)  # shifted, so loss isn't trivially 0
+
+        loss_unscaled = loss_fn(pred, true, freqs).item()
+        loss_scaled = loss_fn(pred + np.log(5.0), true, freqs).item()  # 5x in linear space
+        assert loss_scaled == pytest.approx(loss_unscaled, rel=1e-4)
+
+    def test_forgiving_of_small_shifts_unlike_pointwise_error(self):
+        """A narrow peak shifted by a small vs. large number of bins: W1
+        must scale smoothly/monotonically with shift distance, while a
+        plain pointwise error on the same pairs is roughly CONSTANT (a
+        narrow peak has near-total non-overlap even for a 1-bin shift, so
+        pointwise error can't distinguish a near miss from a far one) —
+        this is the exact property motivating W1 over RMSELoss/the
+        (reverted) SpectralSlopeLoss for the multimodal-blur problem."""
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        n = len(SPECTRAL_FREQS)
+        true = _spike(n, 20)
+
+        def pointwise_mse(pred_log):
+            pred_n = torch.exp(pred_log) / torch.exp(pred_log).sum()
+            true_n = torch.exp(true) / torch.exp(true).sum()
+            return ((pred_n - true_n) ** 2).mean().item()
+
+        w1_near = loss_fn(_spike(n, 21), true, freqs).item()   # shift by 1 bin
+        w1_mid = loss_fn(_spike(n, 25), true, freqs).item()    # shift by 5 bins
+        w1_far = loss_fn(_spike(n, 45), true, freqs).item()    # shift by 25 bins
+
+        assert w1_near < w1_mid < w1_far  # W1 scales with distance
+
+        mse_near = pointwise_mse(_spike(n, 21))
+        mse_far = pointwise_mse(_spike(n, 45))
+        assert mse_near == pytest.approx(mse_far, rel=0.05)  # pointwise error is blind to distance
+
+    def test_respects_nonuniform_grid(self):
+        """A uniform (constant-height) true and pred spectrum on a
+        deliberately uneven grid must still give zero loss (sanity: the
+        cumulative integration doesn't introduce spurious error from grid
+        non-uniformity alone), and a perturbed pred must give a loss that
+        changes with WHERE on the grid the perturbation sits, not just its
+        bin-index position — a pure index-based (non-Δf-aware) computation
+        would be insensitive to this."""
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor([0.02, 0.03, 0.07, 0.08, 0.20, 0.485])
+        flat_true = torch.log(torch.full((6,), 1.0))
+        assert loss_fn(flat_true, flat_true, freqs).item() == pytest.approx(0.0, abs=1e-5)
+
+        pred_a = torch.log(torch.tensor([1.0, 1.0, 2.0, 1.0, 1.0, 1.0]))  # bump in a narrow bin
+        pred_b = torch.log(torch.tensor([1.0, 1.0, 1.0, 1.0, 2.0, 1.0]))  # bump in a wide bin
+        loss_a = loss_fn(pred_a, flat_true, freqs).item()
+        loss_b = loss_fn(pred_b, flat_true, freqs).item()
+        assert loss_a != pytest.approx(loss_b, rel=1e-3)
+
+    def test_batched_multistep_shape(self):
+        """(batch, lead_time, num_freqs) — the shape train_one_epoch's
+        y_pred/y_batch actually have — must work, not just a bare 1-D
+        spectrum."""
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        batch, lead_time = 3, 4
+        true_1d = _spike(len(SPECTRAL_FREQS), 20)
+        true = true_1d.expand(batch, lead_time, -1)
+        pred = true.clone()
+
+        loss = loss_fn(pred, true, freqs)
+        assert loss.dim() == 0
+        assert loss.item() == pytest.approx(0.0, abs=1e-5)

@@ -58,6 +58,15 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 # retrained model is selected the same way the search selected it.
 OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
 
+# target == 'shape' only. Mixing weight for the auxiliary
+# SpectralWassersteinLoss term (see nn/training_loop.py) — the 1-D
+# earth-mover distance between predicted and true spectra, forgiving of
+# small peak-position shifts while still penalizing a blurred/flattened
+# prediction. 0.0 = old behavior, not yet part of optimize.py's Optuna
+# search space (see nn/optimization.py::_train_model's docstring) — set
+# manually here for a before/after test.
+WASSERSTEIN_LOSS_WEIGHT = 0.0
+
 # Seeds to retrain with. A single seed trains one final model. Add more to
 # get a mean±std noise estimate across independent weight initializations and
 # shuffle orders — every seed retrains from scratch on the same data with the
@@ -199,6 +208,7 @@ def main():
                 num_epochs=NUM_EPOCHS,
                 patience=PATIENCE,
                 trial=None,
+                wasserstein_loss_weight=WASSERSTEIN_LOSS_WEIGHT,
             )
 
             if best_model_state is not None:
