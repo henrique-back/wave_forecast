@@ -83,14 +83,64 @@ set_seed(42)
 #     'Hs_SS', 'Tm02_RMSE', and 'Shape_RMSE' are exp()'d back to physical
 #     units internally (nn/evaluate.py) and remain the fair basis for
 #     comparing this ablation against pre-v12 results.
-STUDY_VERSION = "v11"
+#
+# NOTE on the v11 -> v12 gap: the paragraph above was apparently written when
+# the log-spectral-energy / log-space-MSE change shipped, but STUDY_VERSION
+# itself was left at "v11" — no optuna_study_v12.db or results/shape_v12/
+# were ever produced under that label, yet shape_v11's actual results already
+# reflect this log-space behavior (current nn/training_loop.py code). So the
+# version bump for that change was seemingly never applied even though the
+# code and this comment shipped. Left as-is (not retroactively relabeled) —
+# "v12" below is the next genuinely unused version number, used for a
+# different, later change.
+#
+# v12: two additions, both validated by a manual before/after comparison
+# (not committed — reusing shape_v11's exact other hyperparameters) before
+# being wired into the search space here:
+#   - wasserstein_loss_weight (nn/optimization.py::objective(), new
+#     trial.suggest_float hyperparameter): an auxiliary SpectralWassersteinLoss
+#     term (utils/loss.py) for target=='shape' — the 1-D earth-mover distance
+#     between predicted and true spectra (exact via CDF L1 distance), added
+#     to the existing per-bin loss. Manually swept at weights 50/150 vs a
+#     0-weight control: every metric improved monotonically (Shape_RMSE
+#     2.244->2.083, Shape_SS 0.107->0.171, Peak_Separation_Recall
+#     0.580->0.617 at weight 150) and the improvement was confirmed visually
+#     sharper on known-multimodal test samples, not just numerically better —
+#     see nn/training_loop.py's docstring for why this term exists (a
+#     whole-spectrum frequency-weighted loss gives multimodal peaks no
+#     special treatment on its own; W1 pushes back on "too flat" specifically).
+#   - AUX_SET switched from 'none' to 'dmd' (see below): Dynamic Mode
+#     Decomposition features (nn/prepare_dmd.py) computed per-sample from the
+#     encoder's input window of (already-normalized) density spectra — a few
+#     dominant modes' growth/decay rate and oscillation frequency, giving the
+#     encoder direct information about whether currently-observed wave
+#     systems are growing or decaying, rather than requiring the Transformer
+#     to infer that implicitly. Manually validated alone (smaller, less
+#     consistent effect than the Wasserstein term) and in combination with it
+#     (best Peak_Separation_Recall/Peak_Count_Pred_Mean of anything tested,
+#     and the visually sharpest/tallest peaks across every known-multimodal
+#     sample checked, even though whole-spectrum Shape_RMSE slightly favored
+#     the Wasserstein-only run — the two metrics disagreeing here is itself
+#     consistent with this project's recurring finding that aggregate
+#     spectrum-wide error metrics dilute peak-specific behavior).
+#   - OBJECTIVE_METRIC switched from 'final_step_SS' to
+#     'final_step_SS_wasserstein' (nn/optimization.py::_compute_val_score):
+#     training now includes the Wasserstein term above, so selecting
+#     epochs/trials by plain final_step_SS (blind to Shape_Wasserstein) would
+#     be inconsistent with what's actually being optimized for — risking
+#     silently discarding a better-separated-peaks checkpoint in favor of one
+#     that's marginally better on a metric known to dilute exactly that
+#     property. The blend uses a fixed constant weight
+#     (_FINAL_STEP_SS_WASSERSTEIN_BETA), not the trial's own
+#     wasserstein_loss_weight, to keep cross-trial comparison fair.
+STUDY_VERSION = "v12"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "shape_v11"
+EXPERIMENT_NAME = "shape_v12"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -111,17 +161,28 @@ EXPERIMENT_DESCRIPTION = (
     "to frequency-weighted plain MSE in log-space; non-negativity of the "
     "physical shape now comes from exp() at inference/metric time instead of "
     "an architectural Softplus constraint."
+    "v12: adds a tunable auxiliary Wasserstein-distance loss term "
+    "(wasserstein_loss_weight, see utils/loss.py::SpectralWassersteinLoss) "
+    "targeting multimodal (double/triple-peaked) sea states that a "
+    "whole-spectrum frequency-weighted loss blurs into one smoothed hump, "
+    "and switches AUX_SET to 'dmd' — Dynamic Mode Decomposition features "
+    "(nn/prepare_dmd.py) giving the encoder each sample's dominant "
+    "growth/decay rate and oscillation frequency from its input window, "
+    "instead of requiring the model to infer current wave-system dynamics "
+    "implicitly. Both validated by a manual before/after comparison prior to "
+    "being added to the search space — see STUDY_VERSION's v12 comment above."
 )
 
 # Set parameters
-lead_times_hours = [6, 12, 24]
+lead_times_hours = [24, 48]
 target = "shape"
-# With 9 tunable hyperparameters (4 categorical, 2 int, 3 continuous),
-# n_startup_trials=15 gives multivariate TPE enough random samples to fit an
+# With 10 tunable hyperparameters (4 categorical, 2 int, 4 continuous —
+# wasserstein_loss_weight added in v12), n_startup_trials=15 gives
+# multivariate TPE enough random samples to fit an
 # initial KDE without eating half the budget on pure random search (as
 # n_startup_trials=20 of n_trials=40 did previously); n_trials=80 leaves 65
 # trials for TPE to actually exploit that model, vs. only 20 before.
-n_trials = 80
+n_trials = 70
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
 #   'density' : spectral density only
@@ -133,9 +194,12 @@ assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_S
 # nn/channels.py. 'wind' requires buoy_data/wind.txt to have been processed
 # (i.e. processed_data.pkl regenerated after utils/data_processing.py added
 # wind support).
-#   'none' : no auxiliary input (current default)
+#   'none' : no auxiliary input
 #   'wind' : wind_u/wind_v
-AUX_SET = "none"
+#   'dmd'  : Dynamic Mode Decomposition growth-rate/frequency/amplitude
+#            features from the input window's density history (nn/prepare_dmd.py)
+#            — current default as of v12, see STUDY_VERSION's changelog comment.
+AUX_SET = "dmd"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
@@ -155,7 +219,23 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 #   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
 #   'Shape_RMSE'        negative spectral shape RMSE (density target only)
 #   'SI_mean'           negative mean Scatter Index  (density target only)
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "final_step_SS"
+#   'final_step_SS_wasserstein'  final_step_SS minus a FIXED penalty on
+#                       Shape_Wasserstein (shape target only, for now) — see
+#                       nn/optimization.py::_FINAL_STEP_SS_WASSERSTEIN_BETA.
+#                       Added in v12 so that model/checkpoint SELECTION is
+#                       structurally consistent with what's actually being
+#                       TRAINED for (the loss now includes an auxiliary
+#                       Wasserstein term, wasserstein_loss_weight) — using
+#                       plain final_step_SS here would mean picking the best
+#                       trial/epoch by a criterion blind to the exact
+#                       peak-separation quality the Wasserstein term exists
+#                       to improve, which is the thing we actually care about
+#                       reporting. The blend weight is a separate, fixed
+#                       constant, deliberately NOT the trial's own
+#                       wasserstein_loss_weight (see that constant's comment
+#                       for why using the tunable per-trial weight here would
+#                       corrupt cross-trial comparison).
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "final_step_SS_wasserstein"
 
 # Process data
 BUOY_ID = "32012"

@@ -3,10 +3,12 @@ from pathlib import Path
 
 import numpy as np
 import optuna
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 import torch.optim as optim
-from nn import WaveSpectralDataset, WaveHeightBaselineNN, prepare_X, prepare_aux, prepare_y, train_one_epoch, evaluate
+from nn import (WaveSpectralDataset, WaveHeightBaselineNN, prepare_X, prepare_aux, prepare_y,
+                 train_one_epoch, evaluate, compute_dmd_features)
 from nn.channels import CHANNEL_SETS, NORM_MODES, AUX_CHANNEL_SETS, AUX_NORM_MODES
 from utils import set_seed, get_device, empty_cache
 
@@ -34,6 +36,27 @@ def _normalize(train_df, *other_dfs, mode='zscore'):
         return tuple(df / mean for df in (train_df, *other_dfs))
     else:  # 'none'
         return (train_df, *other_dfs)
+
+
+# Fixed blend weight for the 'final_step_SS_wasserstein' objective_metric —
+# deliberately NOT tied to the trial's own (tunable) wasserstein_loss_weight
+# hyperparameter. Using the trial's own weight here would make cross-trial
+# comparison unfair: trials sampling a large wasserstein_loss_weight would
+# get a structurally different scoring scale than trials sampling a small
+# one, purely from that hyperparameter choice, corrupting the very
+# comparison Optuna's search depends on. This is a separate, constant
+# analyst choice instead.
+#
+# Value chosen by rough order-of-magnitude matching against observed test-set
+# ranges from the manual validation (not a precisely fit constant — revisit
+# once real study data exists): final_step_SS-family metrics sit around
+# 0.1-0.2 in this problem (e.g. best_val_weighted_mean_SS was 0.17-0.18
+# across the manually-tested configs), while Shape_Wasserstein sits around
+# 0.011-0.014 for well-trained models. BETA=10 puts a typical
+# Shape_Wasserstein contribution (~0.1-0.14) on a comparable scale to a
+# typical SS value, so neither term structurally dominates the other by
+# construction alone.
+_FINAL_STEP_SS_WASSERSTEIN_BETA = 10.0
 
 
 def _weighted_mean_ss(per_step_ss):
@@ -78,6 +101,13 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         'Tm02_RMSE'        : negative Tm02 RMSE (density target only)
         'Shape_RMSE'       : negative spectral shape RMSE (density target only)
         'SI_mean'          : negative mean Scatter Index (density target only)
+        'final_step_SS_wasserstein' : final_step_SS minus a fixed penalty on
+                             Shape_Wasserstein (shape target only, for now —
+                             Shape_Wasserstein is only computed in that
+                             target's evaluate() block). See
+                             _FINAL_STEP_SS_WASSERSTEIN_BETA's comment for why
+                             this exists and why its weight is NOT the same
+                             as the training-time wasserstein_loss_weight.
     """
     if objective_metric == 'final_step_SS':
         return metrics['per_step_SS'][-1]
@@ -97,11 +127,14 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         return -metrics['Shape_RMSE']
     elif objective_metric == 'SI_mean':
         return -metrics['SI_mean']
+    elif objective_metric == 'final_step_SS_wasserstein':
+        return metrics['per_step_SS'][-1] - _FINAL_STEP_SS_WASSERSTEIN_BETA * metrics['Shape_Wasserstein']
     else:
         raise ValueError(
             f"Unknown objective_metric {objective_metric!r}. Valid: "
             "'final_step_SS', 'weighted_mean_SS', 'overall_SS', 'Hs_SS', "
-            "'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean'"
+            "'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean', "
+            "'final_step_SS_wasserstein'"
         )
 
 
@@ -122,7 +155,9 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         scripts/train.py sets this to a nonzero value, for a manual
         before/after comparison ahead of adding it as a tunable hyperparameter.
 
-    Returns (best_val_score, best_val_metrics, best_model_state).
+    Returns (best_val_score, best_val_metrics, best_model_state) — note
+    best_val_score is the SMOOTHED score (see VAL_SCORE_SMOOTHING_WINDOW
+    below), not a single epoch's raw value.
     """
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     # patience=3 so the LR is halved 7 epochs before early stopping fires (at
@@ -131,6 +166,20 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         optimizer, mode='max', patience=5, factor=0.5, cooldown=2
     )
 
+    # Linear LR warmup: this transformer has no warmup and trains AdamW at the
+    # sampled lr from epoch 0, which is known to be unstable for transformers
+    # at the higher end of a search range. Optuna analysis of shape_v11/v12
+    # found lr dominating hyperparameter importance (0.23-0.69) while only
+    # weakly correlating with score (0.23-0.47) — the best and worst trials at
+    # every lead time drew lr from almost the same range, the signature of
+    # noisy/unstable early training rather than a clean optimum TPE can
+    # exploit. Ramping up to the sampled lr over the first few epochs should
+    # cut that instability and let the true hyperparameter signal (lr's own
+    # and everyone else's) come through more cleanly. ReduceLROnPlateau only
+    # starts stepping once warmup ends, so the ramp itself is never mistaken
+    # for a plateau.
+    WARMUP_EPOCHS = 5
+
     # tf_ratio decays from 1.0 to 0.0 over 2×patience epochs.  With early
     # stopping at patience=20, a run going to epoch ~40 will have tf_ratio
     # ≈ 0.5 — half its training steps use the model's own predictions, which
@@ -138,11 +187,22 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     tf_decay_epochs = 2 * patience
 
     # Epoch-to-epoch val_score is noisy (autoregressive eval on a small val
-    # split); reporting the raw value to the pruner let it compare trials on
-    # single unlucky/lucky epochs. A trailing mean smooths that out before it
-    # reaches trial.report/should_prune — best_val_score/early-stopping below
-    # still use the raw per-epoch value, since that only picks a checkpoint.
-    PRUNER_SMOOTHING_WINDOW = 5
+    # split) — this trailing mean smooths it before it drives ANY decision:
+    # the LR scheduler, early-stopping/checkpoint selection, AND (when
+    # running as an Optuna trial) the pruner report. Originally only the
+    # pruner report was smoothed (best_val_score/early-stopping used the raw
+    # per-epoch value on the reasoning that picking a checkpoint was lower-
+    # stakes than pruning a whole trial) — that assumption broke for the
+    # 'final_step_SS_wasserstein' objective_metric: its Shape_Wasserstein
+    # term has enough of its own per-epoch variance (amplified by
+    # _FINAL_STEP_SS_WASSERSTEIN_BETA) that an unsmoothed run locked its best
+    # checkpoint onto an early noise spike (epoch 14) and never recognized
+    # genuinely continued improvement in later epochs (Shape_SS climbing
+    # steadily through epoch 30+) as "better" — early stopping then fired on
+    # a stale, undertrained checkpoint. Smoothing everything from the same
+    # trailing window removes that failure mode instead of just the pruner's
+    # narrower version of it.
+    VAL_SCORE_SMOOTHING_WINDOW = 5
     val_score_history = []
 
     best_val_score = float('-inf')
@@ -151,6 +211,13 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     epochs_no_improve = 0
 
     for epoch in range(num_epochs):
+        if epoch < WARMUP_EPOCHS:
+            # 10% -> 100% of the sampled lr over WARMUP_EPOCHS epochs, rather
+            # than 0% -> 100%, so the very first step still makes progress.
+            warmup_lr = lr * (0.1 + 0.9 * (epoch + 1) / WARMUP_EPOCHS)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = warmup_lr
+
         tf_ratio = max(0.0, 1.0 - epoch / tf_decay_epochs)
 
         train_metrics = train_one_epoch(model, train_loader, optimizer, device, freqs,
@@ -162,8 +229,11 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                                   shape_means=shape_means)
 
         val_score = _compute_val_score(val_metrics, objective_metric)
+        val_score_history.append(val_score)
+        smoothed_score = float(np.mean(val_score_history[-VAL_SCORE_SMOOTHING_WINDOW:]))
 
-        scheduler.step(val_score)
+        if epoch >= WARMUP_EPOCHS:
+            scheduler.step(smoothed_score)
 
         bulk_str = ""
         if target == 'density' and 'Hs_RMSE' in val_metrics:
@@ -188,20 +258,17 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
               f"Val RMSE: {val_metrics['RMSE']:.4f} | "
               f"Val Hs_MAPE: {hs_mape_str} | "
               f"Val CC: {val_metrics['CC']:.4f} | "
-              f"Val {objective_metric}: {val_score:.4f} | "
+              f"Val {objective_metric}: {val_score:.4f} (smoothed: {smoothed_score:.4f}) | "
               f"tf_ratio: {tf_ratio:.2f}"
               + bulk_str)
 
-        val_score_history.append(val_score)
-
         if trial is not None:
-            smoothed_score = float(np.mean(val_score_history[-PRUNER_SMOOTHING_WINDOW:]))
             trial.report(smoothed_score, epoch)
             if trial.should_prune():
                 raise optuna.TrialPruned()
 
-        if val_score > best_val_score:
-            best_val_score = val_score
+        if smoothed_score > best_val_score:
+            best_val_score = smoothed_score
             best_val_metrics = val_metrics
             # Snapshot the weights at this epoch so downstream evaluation uses
             # the best checkpoint, not whatever the last epoch produced.
@@ -330,12 +397,19 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
         val_y   = prepare_y(val_density,   seq_len, lead_time, target='density')
         test_y  = prepare_y(test_density,  seq_len, lead_time, target='density')
 
-    # Auxiliary side-input (e.g. wind) — scalar-per-timestep, not frequency-
-    # resolved, so it is windowed via prepare_aux (no freq axis) rather than
-    # prepare_X, and fused into the encoder separately (see WaveHeightBaselineNN).
+    # Auxiliary side-input — scalar-per-timestep, not frequency-resolved, so
+    # it bypasses prepare_X/FreqDimEmbedding and is fused into the encoder
+    # separately (see WaveHeightBaselineNN). Two independent sources:
+    # 'wind' varies per-timestep (windowed by prepare_aux from a
+    # full-length series); 'dmd' is computed ONCE per sample from that
+    # sample's own already-windowed density history (nn/prepare_dmd.py),
+    # then broadcast across seq_len to match prepare_aux's output shape —
+    # prepare_aux itself can't compute this (it only windows an
+    # already-fully-computed per-timestep series, the opposite order DMD
+    # needs), hence the separate branch below.
     aux_names = AUX_CHANNEL_SETS[aux_set]
     num_aux_channels = len(aux_names)
-    if aux_names:
+    if aux_set == 'wind':
         if wind is None:
             raise ValueError(f"aux_set={aux_set!r} requires a wind dataframe")
         train_wind = wind[:train_end]
@@ -349,6 +423,25 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
         train_aux = prepare_aux([normalized_aux[name][0][name] for name in aux_names], len(train_density), seq_len, lead_time)
         val_aux   = prepare_aux([normalized_aux[name][1][name] for name in aux_names], len(val_density),   seq_len, lead_time)
         test_aux  = prepare_aux([normalized_aux[name][2][name] for name in aux_names], len(test_density),  seq_len, lead_time)
+    elif aux_set == 'dmd':
+        train_dmd_raw = compute_dmd_features(train_X[..., 0].numpy())
+        val_dmd_raw   = compute_dmd_features(val_X[..., 0].numpy())
+        test_dmd_raw  = compute_dmd_features(test_X[..., 0].numpy())
+        train_dmd_df, val_dmd_df, test_dmd_df = (
+            pd.DataFrame(arr, columns=aux_names)
+            for arr in (train_dmd_raw, val_dmd_raw, test_dmd_raw)
+        )
+        normalized_aux = {
+            name: _normalize(train_dmd_df[[name]], val_dmd_df[[name]], test_dmd_df[[name]],
+                              mode=AUX_NORM_MODES[name])
+            for name in aux_names
+        }
+        train_arr = np.stack([normalized_aux[name][0][name].values for name in aux_names], axis=1)
+        val_arr   = np.stack([normalized_aux[name][1][name].values for name in aux_names], axis=1)
+        test_arr  = np.stack([normalized_aux[name][2][name].values for name in aux_names], axis=1)
+        train_aux = torch.from_numpy(np.repeat(train_arr[:, None, :], seq_len, axis=1).astype(np.float32))
+        val_aux   = torch.from_numpy(np.repeat(val_arr[:, None, :],   seq_len, axis=1).astype(np.float32))
+        test_aux  = torch.from_numpy(np.repeat(test_arr[:, None, :],  seq_len, axis=1).astype(np.float32))
     else:
         train_aux = prepare_aux([], len(train_density), seq_len, lead_time)
         val_aux   = prepare_aux([], len(val_density),   seq_len, lead_time)
@@ -429,6 +522,18 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     # an optimal region, so this keeps the original wide range to let Optuna
     # re-discover it under the new optimizer.
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-2, log=True)
+    # target == 'shape' only (no-op otherwise — see train_one_epoch). Range
+    # from a manual sweep (not committed) reusing shape_v11's exact other
+    # hyperparameters: weights 50 and 150 both improved every metric
+    # (Shape_RMSE/SS, peak-separation recall, unimodal AND multimodal SS)
+    # monotonically over the 0-weight baseline, with no sign of diminishing
+    # returns yet at 150 — the upper bound here (400) is deliberately well
+    # above the highest manually-tested value rather than assuming 150 was
+    # near-optimal; the lower bound (10) sits below 50 (the smallest value
+    # that showed a real effect) so Optuna can still discover "less matters"
+    # across the wider hyperparameter space this searches vs. the manual
+    # sweep's fixed other-hyperparameters test.
+    wasserstein_loss_weight = trial.suggest_float('wasserstein_loss_weight', 10.0, 400.0, log=True)
 
     # Safety net: embed_dim must be divisible by nhead (guaranteed by construction
     # above, but kept to catch any future reparameterization changes).
@@ -467,7 +572,8 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
         best_val_score, best_val_metrics, best_model_state = _train_model(
             model, train_loader, val_loader, device, freqs, freq_means, shape_means,
             target, lead_time, lr, weight_decay, objective_metric,
-            num_epochs=100, patience=20, trial=trial)
+            num_epochs=100, patience=20, trial=trial,
+            wasserstein_loss_weight=wasserstein_loss_weight)
     except torch.OutOfMemoryError:
         # Drop references to this trial's model/optimizer/activations before
         # emptying the cache — otherwise the exception's traceback keeps the
