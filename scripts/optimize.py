@@ -220,7 +220,10 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 #   'Shape_RMSE'        negative spectral shape RMSE (density target only)
 #   'SI_mean'           negative mean Scatter Index  (density target only)
 #   'final_step_SS_wasserstein'  final_step_SS minus a FIXED penalty on
-#                       Shape_Wasserstein (shape target only, for now) — see
+#                       Shape_Wasserstein (works for both 'shape' and
+#                       'density' targets — see nn/evaluate.py, which
+#                       computes 'Shape_Wasserstein' the same way, masked by
+#                       M0_MASK_THRESHOLD, for 'density') — see
 #                       nn/optimization.py::_FINAL_STEP_SS_WASSERSTEIN_BETA.
 #                       Added in v12 so that model/checkpoint SELECTION is
 #                       structurally consistent with what's actually being

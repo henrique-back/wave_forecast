@@ -93,22 +93,41 @@ class SpectralWassersteinLoss(torch.nn.Module):
     model.infer()'s explicit renormalization), so a systematically
     over/under-scaled prediction should not inflate this loss/metric on its
     own — only genuine distributional (shape) mismatch should.
+
+    This internal mass-normalization is also why the class works unchanged
+    for target == 'density': its log-spectral-energy is exponentiated and
+    normalized the same way 'shape's log-shape is, so nothing here is
+    actually shape-specific — only the (separate) gating in
+    nn/training_loop.py/nn/evaluate.py decides which targets use it.
     """
 
-    def forward(self, y_pred, y_true, freqs):
+    def forward(self, y_pred, y_true, freqs, reduction='mean'):
         """
         Parameters
         ----------
         y_pred, y_true : torch.Tensor, shape (..., num_freqs)
-            LOG-shape (this project's convention throughout
-            nn/training_loop.py) — exponentiated internally, since a CDF
-            requires actual non-negative mass, not log-values.
+            LOG-space (log-shape for target=='shape', log-spectral-energy
+            for target=='density' — this project's convention throughout
+            nn/training_loop.py/nn/evaluate.py) — exponentiated internally,
+            since a CDF requires actual non-negative mass, not log-values.
+            The internal per-spectrum mass-normalization (below) means this
+            class is not actually shape-specific: it works identically for
+            'density' target's physical log E(f), which is why it's used
+            unchanged for both.
         freqs : torch.Tensor, shape (num_freqs,)
+        reduction : 'mean' | 'none'
+            'mean' (default): scalar, mean W1 distance over every (batch,
+            lead_time, ...) axis — used as-is by the training loss.
+            'none': returns the per-(batch, lead_time, ...) tensor before
+            averaging — used by nn/evaluate.py's 'density' block, which
+            must exclude near-zero-mass samples (M0_MASK_THRESHOLD) before
+            averaging, the same masking already applied to Shape_RMSE/SS
+            there; that requires per-sample values, not a pre-reduced scalar.
 
         Returns
         -------
-        torch.Tensor, scalar — mean W1 distance over every (batch,
-        lead_time, ...) axis.
+        torch.Tensor — scalar if reduction=='mean', else shape (batch,
+        lead_time, ...) matching the input's leading dims.
         """
         freqs = freqs.to(y_pred.device)
         pred_phys = torch.exp(y_pred)
@@ -123,7 +142,12 @@ class SpectralWassersteinLoss(torch.nn.Module):
         cdf_true = _cumulative_trapz(true_norm, freqs)
 
         w1 = torch.trapezoid(torch.abs(cdf_pred - cdf_true), freqs, dim=-1)
-        return w1.mean()
+        if reduction == 'mean':
+            return w1.mean()
+        elif reduction == 'none':
+            return w1
+        else:
+            raise ValueError(f"Unknown reduction {reduction!r}. Valid: 'mean', 'none'")
 
 
 class DirectionalLoss(torch.nn.Module):

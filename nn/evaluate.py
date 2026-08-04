@@ -137,6 +137,14 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                persistence baseline computed the same way
                                (last observed shape held constant), at the
                                final step.
+        'Shape_Wasserstein'  : float, 1-D Wasserstein (earth-mover) distance
+                               in the same mass-normalized shape space as
+                               Shape_RMSE/SS, masked the same way (near-zero
+                               m₀_target samples excluded) — see
+                               utils.SpectralWassersteinLoss and the 'shape'
+                               target's own 'Shape_Wasserstein' entry below
+                               (same metric name, same underlying class, used
+                               for both target types).
 
     Per-frequency-bin Scatter Index (final step only):
         'SI_per_bin'         : list[float], length num_freqs; SI[i] =
@@ -473,9 +481,26 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             shape_rmse_pers = float(per_spectrum_rmse_pers[valid].mean())
             shape_ss = (1.0 - shape_rmse / shape_rmse_pers
                         if shape_rmse_pers > 0 else float('nan'))
+
+            # 1-D Wasserstein (earth-mover) distance, same masked-mean
+            # discipline as Shape_RMSE/SS above (near-zero-mass samples
+            # excluded before averaging) — see utils.SpectralWassersteinLoss.
+            # Reuses the SAME class the 'shape' target uses unchanged: it
+            # already internally exp()s + mass-normalizes, so it isn't
+            # actually shape-specific (see that class's docstring). Uses
+            # y_pred_all[:, -1:, :] (colon-slice, keeping the lead_time axis
+            # at size 1) rather than the 'shape' block's integer-index
+            # convention, so the result's shape matches `valid`'s (batch, 1)
+            # without any reshape.
+            wasserstein_fn = SpectralWassersteinLoss()
+            w1_per_sample = wasserstein_fn(
+                y_pred_all[:, -1:, :], y_true_all[:, -1:, :], freqs, reduction='none'
+            ).numpy()  # (batch, 1)
+            shape_wasserstein = float(w1_per_sample[valid].mean())
         else:
             shape_rmse = float('nan')
             shape_ss = float('nan')
+            shape_wasserstein = float('nan')
 
         # --- Per-frequency-bin Scatter Index ---
         # Flatten to (N, num_freqs) so each bin's RMSE and mean are computed
@@ -499,6 +524,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             'Shape_RMSE'          : shape_rmse,
             'Shape_masked_samples': n_masked,
             'Shape_SS'            : shape_ss,
+            'Shape_Wasserstein'   : shape_wasserstein,
             'SI_per_bin'          : si_per_bin.tolist(),
             'SI_mean'             : si_mean,
         }

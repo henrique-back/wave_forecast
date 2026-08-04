@@ -237,3 +237,31 @@ class TestSpectralWassersteinLoss:
         loss = loss_fn(pred, true, freqs)
         assert loss.dim() == 0
         assert loss.item() == pytest.approx(0.0, abs=1e-5)
+
+    def test_reduction_none_matches_reduction_mean(self):
+        """reduction='none' (used by nn/evaluate.py's 'density' block, which
+        must mask out near-zero-mass samples before averaging) must return
+        the same per-sample values that reduction='mean' (the training-loss
+        default) averages over — not a different computation path."""
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        n = len(SPECTRAL_FREQS)
+        true = torch.stack([_spike(n, 15), _spike(n, 20), _spike(n, 30)])
+        pred = torch.stack([_spike(n, 16), _spike(n, 20), _spike(n, 35)])
+
+        per_sample = loss_fn(pred, true, freqs, reduction='none')
+        scalar = loss_fn(pred, true, freqs, reduction='mean')
+
+        assert per_sample.shape == (3,)
+        assert per_sample.mean().item() == pytest.approx(scalar.item(), rel=1e-5)
+        # Identical pair (index 1) must be exactly zero; the others must not.
+        assert per_sample[1].item() == pytest.approx(0.0, abs=1e-5)
+        assert per_sample[0].item() > 0.0
+        assert per_sample[2].item() > 0.0
+
+    def test_reduction_invalid_raises(self):
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        true = _spike(len(SPECTRAL_FREQS), 20)
+        with pytest.raises(ValueError, match="reduction"):
+            loss_fn(true, true, freqs, reduction='sum')
