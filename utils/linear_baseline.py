@@ -376,17 +376,30 @@ def _compute_metrics(y_pred_np, y_true_np, y_pers_np, freqs_np, target):
     return metrics
 
 
-def evaluate_coeffs(density, freqs, coeffs, seq_len, lead_time, target, eval_split='test'):
+def evaluate_coeffs(density, freqs, coeffs, seq_len, lead_time, target, eval_split='test',
+                     return_arrays=False):
     """Score already-fitted AR coefficients (e.g. loaded from a checkpoint
     saved by scripts/train_linear_baseline.py) against `eval_split`, without
-    refitting. See _compute_metrics for the returned keys."""
+    refitting. See _compute_metrics for the returned keys.
+
+    return_arrays : bool, mirrors nn/evaluate.py::evaluate()'s own flag —
+        if True, also returns the raw (pred, true, pers) physical arrays
+        (shape (num_samples, lead_time, num_cols)) alongside the metrics
+        dict, as (metrics, (pred, true, pers)). Useful for callers (e.g.
+        scripts/compare_versions.py) that want to plot the forecasts
+        directly rather than just read the summary metrics.
+    """
     freqs_np = _to_numpy(freqs)
     y_pred_np, y_true_np, y_pers_np = forecast_coeffs(
         density, freqs, coeffs, seq_len, lead_time, target, eval_split=eval_split)
-    return _compute_metrics(y_pred_np, y_true_np, y_pers_np, freqs_np, target)
+    metrics = _compute_metrics(y_pred_np, y_true_np, y_pers_np, freqs_np, target)
+    if return_arrays:
+        return metrics, (y_pred_np, y_true_np, y_pers_np)
+    return metrics
 
 
-def evaluate_linear_ar(density, freqs, seq_len, lead_time, target, ridge=1e-6, eval_split='test'):
+def evaluate_linear_ar(density, freqs, seq_len, lead_time, target, ridge=1e-6, eval_split='test',
+                        return_arrays=False):
     """Fit a per-frequency-bin (or scalar, for 'hs') linear AR baseline on
     the train split and evaluate it on `eval_split` (default 'test'), using
     the same 70/15/15 chronological split nn/optimization.py uses, so
@@ -410,10 +423,12 @@ def evaluate_linear_ar(density, freqs, seq_len, lead_time, target, ridge=1e-6, e
     ridge     : forwarded to fit_linear_ar.
     eval_split: 'val' or 'test' — which split to score against (e.g. 'val'
                 when grid-searching seq_len/ridge, 'test' for a final report).
+    return_arrays: forwarded to evaluate_coeffs — see its docstring.
 
     Returns
     -------
-    See _compute_metrics.
+    See _compute_metrics (and evaluate_coeffs if return_arrays=True).
     """
     coeffs = fit_linear_ar_from_density(density, freqs, seq_len, target, ridge=ridge)
-    return evaluate_coeffs(density, freqs, coeffs, seq_len, lead_time, target, eval_split=eval_split)
+    return evaluate_coeffs(density, freqs, coeffs, seq_len, lead_time, target,
+                            eval_split=eval_split, return_arrays=return_arrays)
