@@ -40,39 +40,30 @@ print("Current working directory:", os.getcwd())
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
 # v9: matches optimize.py's STUDY_VERSION bump for the freq-axis conv
 # padding fix — run optimize.py first to produce shape_v9's best_trial.txt.
-EXPERIMENT_NAME = "shape_v9"
-BUOY_ID = '32012'
+EXPERIMENT_NAME = "shape_v12"
+BUOY_ID = "32012"
 
 target = "shape"
-lead_times_hours = [6]
+lead_times_hours = [12]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.
 CHANNEL_SET = "full"
-AUX_SET = "none"
+AUX_SET = "dmd"
 assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_SETS)}"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
 # retrained model is selected the same way the search selected it.
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "weighted_mean_SS"
-
-# target == 'shape' only. Mixing weight for the auxiliary
-# SpectralWassersteinLoss term (see nn/training_loop.py) — the 1-D
-# earth-mover distance between predicted and true spectra, forgiving of
-# small peak-position shifts while still penalizing a blurred/flattened
-# prediction. 0.0 = old behavior, not yet part of optimize.py's Optuna
-# search space (see nn/optimization.py::_train_model's docstring) — set
-# manually here for a before/after test.
-WASSERSTEIN_LOSS_WEIGHT = 0.0
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "final_step_SS_wasserstein"
 
 # Seeds to retrain with. A single seed trains one final model. Add more to
 # get a mean±std noise estimate across independent weight initializations and
 # shuffle orders — every seed retrains from scratch on the same data with the
 # same hyperparameters, so spread across seeds reflects training noise, not
 # tuning quality.
-SEEDS = [42]
+SEEDS = [40, 41, 42, 43, 44]
 
 NUM_EPOCHS = 100
 PATIENCE = 20
@@ -88,6 +79,24 @@ def parse_best_trial(path: Path) -> dict:
         # (no deltat downsampling wired into this script), so steps == hours.
         "lead_time_steps": lead_hours,
         "lead_time_hours": lead_hours,
+        "params": params,
+    }
+
+
+def parse_current_best(path: Path, lead_time_hours: int) -> dict:
+    """Fallback for a study that hasn't finished (no best_trial.txt yet).
+
+    utils/save_progress.py overwrites current_best.txt after every trial, so
+    it always reflects the best trial so far — but unlike best_trial.txt it
+    has no 'Lead time (hours)' line, so lead_time_hours (the configured value
+    that already selected this results_folder) is used directly instead.
+    """
+    text = path.read_text()
+    params_line = re.search(r"Best params: (.+)\n", text).group(1)
+    params = ast.literal_eval(params_line)
+    return {
+        "lead_time_steps": lead_time_hours,
+        "lead_time_hours": lead_time_hours,
         "params": params,
     }
 
@@ -136,11 +145,18 @@ def main():
             / f"lead_{lead_time_hours}h"
         )
         best_trial_path = results_folder / "best_trial.txt"
-        if not best_trial_path.exists():
-            print(f"no best_trial.txt at {best_trial_path}")
-            continue
-
-        trial_info = parse_best_trial(best_trial_path)
+        if best_trial_path.exists():
+            trial_info = parse_best_trial(best_trial_path)
+        else:
+            current_best_path = results_folder / "current_best.txt"
+            if not current_best_path.exists():
+                print(f"no best_trial.txt or current_best.txt at {results_folder}")
+                continue
+            print(
+                f"no best_trial.txt at {best_trial_path} — "
+                f"falling back to {current_best_path}"
+            )
+            trial_info = parse_current_best(current_best_path, lead_time_hours)
         params = trial_info["params"]
         lead_time_steps = trial_info["lead_time_steps"]
         embed_dim = params["head_dim"] * params["nhead"]
@@ -208,7 +224,12 @@ def main():
                 num_epochs=NUM_EPOCHS,
                 patience=PATIENCE,
                 trial=None,
-                wasserstein_loss_weight=WASSERSTEIN_LOSS_WEIGHT,
+                # Now a tuned hyperparameter (nn/optimization.py::objective,
+                # optimize.py v12+) rather than a manually-set constant, so
+                # it's read from best_trial.txt like every other param.
+                # .get(..., 0.0) falls back to the pre-v12 no-op behavior for
+                # older best_trial.txt files that predate this hyperparameter.
+                wasserstein_loss_weight=params.get("wasserstein_loss_weight", 0.0),
             )
 
             if best_model_state is not None:

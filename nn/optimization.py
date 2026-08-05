@@ -151,9 +151,10 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     wasserstein_loss_weight : float, target == 'shape' only, default 0.0 (no
         behavior change) — forwarded to train_one_epoch's auxiliary
         SpectralWassersteinLoss term (see nn/training_loop.py docstring).
-        Not yet part of objective()'s Optuna search space — currently only
-        scripts/train.py sets this to a nonzero value, for a manual
-        before/after comparison ahead of adding it as a tunable hyperparameter.
+        Tuned by objective() as of optimize.py v12 (trial.suggest_float
+        'wasserstein_loss_weight'); scripts/train.py reads the winning
+        trial's value back out of best_trial.txt's params rather than
+        setting it manually.
 
     Returns (best_val_score, best_val_metrics, best_model_state) — note
     best_val_score is the SMOOTHED score (see VAL_SCORE_SMOOTHING_WINDOW
