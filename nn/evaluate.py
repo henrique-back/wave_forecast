@@ -156,25 +156,56 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                SI_per_bin across all bins; scalar summary for
                                monitoring
 
-    When model.target == 'shape' and freqs is not None, three additional
-    metrics are appended. Unlike the 'density' block above, these do NOT
-    require freq_means (predictions/targets are already the unit-area shape,
-    per nn/prepare_y.py) and are NOT masked by M0_MASK_THRESHOLD — prepare_y
+    When model.target == 'shape' and freqs is not None, additional metrics
+    are appended. Unlike the 'density' block above, these do NOT require
+    freq_means (predictions/targets are already the unit-area shape, per
+    nn/prepare_y.py) and are NOT masked by M0_MASK_THRESHOLD — prepare_y
     discards m₀ for the 'shape' target, so degenerate low-energy spectra
     can't be identified/excluded here the way the 'density' branch does:
-        'Shape_RMSE'         : float, equal to 'per_step_RMSE[-1]' — the final
+        'per_step_RMSE_phys' : list[float], one per forecast step — the SAME
+                               per-step RMSE as the top-level 'per_step_RMSE'
+                               list, but computed in physical (exp()'d)
+                               unit-area shape space rather than log-shape
+                               space. The top-level 'per_step_*' keys stay in
+                               log-space deliberately (matches the training
+                               loss — see docstring NOTE above — so Optuna/
+                               early-stopping/LR-scheduler behavior is
+                               unaffected), which makes them NOT comparable
+                               across a lead-time curve to any always-physical
+                               source (e.g. utils/linear_baseline.py, or a
+                               'density'-target model). Use these '_phys' keys
+                               instead whenever a per-step trend needs to be
+                               plotted or diffed against a physical baseline
+                               (see scripts/compare_versions.py).
+        'per_step_RMSE_pers_phys', 'per_step_SS_phys', 'per_step_Bias_phys' :
+                               same physical-space treatment, for the
+                               persistence RMSE / Skill Score / bias curves.
+        'RMSE_per_bin', 'RMSE_per_bin_pers', 'Bias_per_bin', 'SI_per_bin' :
+                               list[float], length num_freqs; the FINAL
+                               forecast step's error broken out per
+                               frequency bin instead of collapsed across the
+                               spectrum — physical unit-area shape space,
+                               same formula as the 'density' target's
+                               'SI_per_bin' above (SI[i] = RMSE_i /
+                               mean(E_true_i)), just without the
+                               M0_MASK_THRESHOLD masking (not needed here —
+                               see the block's own comment). '_pers' is the
+                               persistence baseline's per-bin RMSE, for a
+                               reference curve alongside the model's.
+        'Shape_RMSE'         : float, equal to 'per_step_RMSE_phys[-1]' — the final
                                forecast step's frequency-weighted shape RMSE,
                                NOT the all-step-pooled top-level 'RMSE' —
                                exposed under this name so it's directly
                                comparable to the 'density' target's Shape_RMSE
                                (also final-step-only).
-        'Shape_SS'           : float, equal to 'per_step_SS[-1]' — the final
+        'Shape_SS'           : float, equal to 'per_step_SS_phys[-1]' — the final
                                step's shape-space Skill Score vs the
                                last-observed-shape persistence baseline, NOT
                                the all-step-pooled top-level 'overall_SS'.
-        'Shape_Wasserstein'  : float, 1-D Wasserstein (earth-mover) distance
-                               between predicted and true final-step shape —
-                               see utils.SpectralWassersteinLoss. Exact via
+        'Shape_Wasserstein'  : float, equal to 'per_step_Wasserstein[-1]' —
+                               1-D Wasserstein (earth-mover) distance between
+                               predicted and true final-step shape — see
+                               utils.SpectralWassersteinLoss. Exact via
                                the CDF-L1 closed form (no OT solver/critic
                                network needed for a 1-D distribution). Each
                                spectrum is normalized by its own mass before
@@ -188,6 +219,29 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                metrics below address. Cheap pure tensor math,
                                so always computed (no opt-in flag, unlike the
                                peak metrics' scipy loop below).
+        'per_step_Wasserstein', 'per_step_Wasserstein_pers' : list[float],
+                               one per forecast step — same model/persistence
+                               pairing as 'per_step_RMSE_phys'/
+                               'per_step_RMSE_pers_phys', but the shift-
+                               tolerant Wasserstein distance instead of RMSE.
+                               Already physical (SpectralWassersteinLoss
+                               exponentiates internally), no '_phys' suffix
+                               needed — there is no log-space variant of this
+                               metric to begin with.
+        'Wasserstein_per_bin', 'Wasserstein_per_bin_pers' : list[float],
+                               length num_freqs; the FINAL step's Wasserstein
+                               distance broken out per frequency bin (mean
+                               over samples of |CDF_pred(f) - CDF_true(f)|
+                               BEFORE the frequency integration — see
+                               SpectralWassersteinLoss's reduction='per_bin'),
+                               so trapz(this, freqs) ≈ 'Shape_Wasserstein'.
+                               Deliberately NOT the same shape as
+                               'RMSE_per_bin': a peak shifted by one bin
+                               shows up here as a bump straddling the true
+                               peak, not a spike exactly at it, since this
+                               tracks displaced probability MASS rather than
+                               a pointwise value gap — read the two together
+                               to tell "peak shifted" from "peak missed".
         'Shape_Mass_Error'   : float, mean absolute deviation of
                                ∫S_pred(f) df from 1 across all (sample, step)
                                pairs — deliberately NOT final-step-only, since
@@ -538,25 +592,69 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         # per_step_rmse[-1]/per_step_ss[-1] (those are now log-space); they
         # must be recomputed here in physical space to stay comparable to
         # the 'density' target's (also physical) Shape_RMSE/Shape_SS above.
-        pred_final = torch.exp(y_pred_all[:, -1, :])
-        true_final = torch.exp(y_true_all[:, -1, :])
-        pers_final = torch.exp(y_pers_all[:, -1, :])
+        pred_phys_all = torch.exp(y_pred_all)
+        true_phys_all = torch.exp(y_true_all)
+        pers_phys_all = torch.exp(y_pers_all)
 
-        shape_rmse_model = rmse_fn(pred_final, true_final, weights=freq_weights).item()
-        shape_rmse_pers  = rmse_fn(pers_final, true_final, weights=freq_weights).item()
-        shape_ss = (1.0 - shape_rmse_model / shape_rmse_pers
-                    if shape_rmse_pers > 0 else float('nan'))
+        # Physical-space per-step curve, same loop shape as the top-level
+        # (log-space) per_step_* block above — see the '_phys' key docstring
+        # entries: this is what makes a 'shape'-target lead-time curve
+        # comparable to an always-physical source (linear_baseline, a
+        # 'density' target's exp()'d Shape_RMSE, etc.), which the top-level
+        # per_step_* keys deliberately are not.
+        per_step_rmse_phys, per_step_rmse_pers_phys = [], []
+        per_step_ss_phys, per_step_bias_phys = [], []
+        for step in range(pred_phys_all.shape[1]):
+            p_s, t_s, pr_s = pred_phys_all[:, step, :], true_phys_all[:, step, :], pers_phys_all[:, step, :]
+            r_s  = rmse_fn(p_s, t_s, weights=freq_weights).item()
+            rp_s = rmse_fn(pr_s, t_s, weights=freq_weights).item()
+            per_step_rmse_phys.append(r_s)
+            per_step_rmse_pers_phys.append(rp_s)
+            per_step_ss_phys.append(1.0 - r_s / rp_s if rp_s > 0 else float('nan'))
+            per_step_bias_phys.append(_weighted_bias(p_s, t_s))
+
+        pred_final, true_final, pers_final = pred_phys_all[:, -1, :], true_phys_all[:, -1, :], pers_phys_all[:, -1, :]
+        shape_rmse_model = per_step_rmse_phys[-1]
+        shape_rmse_pers  = per_step_rmse_pers_phys[-1]
+        shape_ss = per_step_ss_phys[-1]
 
         # 1-D Wasserstein (earth-mover) distance between predicted and true
-        # final-step shape, via SpectralWassersteinLoss's exact CDF-L1
-        # formula — cheap pure tensor math (no scipy/Python loop, unlike the
-        # peak metrics below), so always computed, no opt-in flag needed.
-        # Takes the LOG-shape tensors directly (exponentiates internally) —
-        # NOT pred_final/true_final above, which are already physical.
+        # shape, via SpectralWassersteinLoss's exact CDF-L1 formula — cheap
+        # pure tensor math (no scipy/Python loop, unlike the peak metrics
+        # below), so always computed, no opt-in flag needed. Takes the
+        # LOG-shape tensors directly (exponentiates internally) — NOT
+        # pred_final/true_final above, which are already physical.
+        #
+        # Computed at every step (not just final) since it answers a
+        # different question than per_step_RMSE_phys: RMSE punishes a
+        # shifted peak almost as harshly as a vanished one, so a model that
+        # tracks a swell peak's position well but blurs its exact height can
+        # look no better than one that misses it entirely — per_step_
+        # Wasserstein stays low in the former case, high in the latter (see
+        # SpectralWassersteinLoss's docstring), so comparing the two curves
+        # side by side is the point.
         wasserstein_fn = SpectralWassersteinLoss()
-        shape_wasserstein = wasserstein_fn(
-            y_pred_all[:, -1, :], y_true_all[:, -1, :], freqs
-        ).item()
+        per_step_wasserstein, per_step_wasserstein_pers = [], []
+        for step in range(pred_phys_all.shape[1]):
+            per_step_wasserstein.append(
+                wasserstein_fn(y_pred_all[:, step, :], y_true_all[:, step, :], freqs).item())
+            per_step_wasserstein_pers.append(
+                wasserstein_fn(y_pers_all[:, step, :], y_true_all[:, step, :], freqs).item())
+        shape_wasserstein = per_step_wasserstein[-1]
+
+        # Per-frequency-bin breakdown of the FINAL step's Wasserstein
+        # distance (see reduction='per_bin''s docstring) — mean over the
+        # batch axis of the pointwise CDF gap, so
+        # trapz(Wasserstein_per_bin, freqs) ≈ Shape_Wasserstein. Lets a
+        # peak-shift error be localized along the frequency axis the same
+        # way RMSE_per_bin localizes a pointwise-value error, without
+        # conflating the two failure modes.
+        wasserstein_per_bin = wasserstein_fn(
+            y_pred_all[:, -1, :], y_true_all[:, -1, :], freqs, reduction='per_bin'
+        ).mean(dim=0).numpy()
+        wasserstein_per_bin_pers = wasserstein_fn(
+            y_pers_all[:, -1, :], y_true_all[:, -1, :], freqs, reduction='per_bin'
+        ).mean(dim=0).numpy()
 
         # Mass-conservation diagnostic: model.infer() already renormalizes
         # each predicted step to unit area (in linear space, before
@@ -567,7 +665,37 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         # sanity check for a renormalization regression at ANY step, not a
         # lead-time performance metric.
         mass = np.trapezoid(torch.exp(y_pred_all).numpy(), freqs_np, axis=2)  # (batch, lead_time)
+
+        # --- Per-frequency-bin metrics (FINAL forecast step only), physical
+        # space --- mirrors the 'density' target's SI_per_bin block above
+        # (same SI[i] = RMSE_i / mean(E_true_i) formula), computed on the
+        # exp()'d unit-area shape rather than a physical density spectrum —
+        # no M0_MASK_THRESHOLD masking needed here for the same reason the
+        # rest of this block skips it (prepare_y discards m₀ for 'shape').
+        # RMSE_per_bin_pers is included alongside so a per-bin plot can draw
+        # the persistence baseline as a reference curve, same as per_step_*.
+        pred_np_final = pred_final.numpy()
+        true_np_final = true_final.numpy()
+        pers_np_final = pers_final.numpy()
+        rmse_per_bin      = np.sqrt(((pred_np_final - true_np_final) ** 2).mean(axis=0))  # (num_freqs,)
+        rmse_per_bin_pers = np.sqrt(((pers_np_final - true_np_final) ** 2).mean(axis=0))
+        bias_per_bin      = (pred_np_final - true_np_final).mean(axis=0)
+        mean_per_bin      = true_np_final.mean(axis=0).clip(min=1e-12)
+        si_per_bin        = rmse_per_bin / mean_per_bin
+
         bulk = {
+            'per_step_RMSE_phys'     : per_step_rmse_phys,
+            'per_step_RMSE_pers_phys': per_step_rmse_pers_phys,
+            'per_step_SS_phys'       : per_step_ss_phys,
+            'per_step_Bias_phys'     : per_step_bias_phys,
+            'RMSE_per_bin'           : rmse_per_bin.tolist(),
+            'RMSE_per_bin_pers'      : rmse_per_bin_pers.tolist(),
+            'Bias_per_bin'           : bias_per_bin.tolist(),
+            'SI_per_bin'             : si_per_bin.tolist(),
+            'per_step_Wasserstein'     : per_step_wasserstein,
+            'per_step_Wasserstein_pers': per_step_wasserstein_pers,
+            'Wasserstein_per_bin'      : wasserstein_per_bin.tolist(),
+            'Wasserstein_per_bin_pers' : wasserstein_per_bin_pers.tolist(),
             'Shape_RMSE'       : shape_rmse_model,
             'Shape_SS'         : shape_ss,
             'Shape_Wasserstein': shape_wasserstein,

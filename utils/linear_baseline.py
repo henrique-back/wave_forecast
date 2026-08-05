@@ -43,7 +43,7 @@ import numpy as np
 import torch
 
 from .compute_hs import compute_hs_from_density, compute_bulk_params, compute_shape, trapz_weights
-from .loss import RMSELoss
+from .loss import RMSELoss, SpectralWassersteinLoss
 
 M0_MASK_THRESHOLD = 1e-4  # m² — same as nn/evaluate.py's density-target mask
 
@@ -250,12 +250,17 @@ def _compute_metrics(y_pred_np, y_true_np, y_pers_np, freqs_np, target):
     'Hs_SS', 'Hs_Bias', 'Tm02_RMSE', 'Tm02_Bias', 'Shape_RMSE', 'Shape_SS',
     'Shape_masked_samples', 'SI_per_bin', 'SI_mean' (final forecast step
     only, same convention as nn/evaluate.py's density block); plus for
-    'shape': 'Shape_RMSE', 'Shape_SS' (aliasing per_step_RMSE[-1]/
-    per_step_SS[-1], same convention nn/evaluate.py uses). No 'Hs_SS' key
-    for 'shape' — there is no magnitude information in a pure shape target,
-    and nn/evaluate.py's own 'Hs_SS' for that target is an artifact (it's
-    left equal to the shape-space per_step_SS[-1], never overwritten) rather
-    than a deliberate metric, so it isn't reproduced here.
+    'shape': 'Shape_RMSE', 'Shape_SS', 'Shape_Wasserstein' (aliasing
+    per_step_RMSE[-1]/per_step_SS[-1]/per_step_Wasserstein[-1], same
+    convention nn/evaluate.py uses), plus 'RMSE_per_bin'/'RMSE_per_bin_pers'/
+    'Bias_per_bin'/'SI_per_bin'/'Wasserstein_per_bin'/
+    'Wasserstein_per_bin_pers' (FINAL step only) and 'per_step_Wasserstein'/
+    'per_step_Wasserstein_pers' (every step) — all the same formulas/keys as
+    nn/evaluate.py's shape block, see utils.SpectralWassersteinLoss. No
+    'Hs_SS' key for 'shape' — there is no magnitude information in a pure
+    shape target, and nn/evaluate.py's own 'Hs_SS' for that target is an
+    artifact (it's left equal to the shape-space per_step_SS[-1], never
+    overwritten) rather than a deliberate metric, so it isn't reproduced here.
     """
     lead_time = y_pred_np.shape[1]
     y_pred = torch.from_numpy(y_pred_np).float()
@@ -367,10 +372,70 @@ def _compute_metrics(y_pred_np, y_true_np, y_pers_np, freqs_np, target):
     elif target == 'shape':
         # Already physical (this baseline never leaves physical space) —
         # aliases the final-step per_step_RMSE/SS, same convention as
-        # nn/evaluate.py's shape block.
+        # nn/evaluate.py's shape block. The '_phys' keys are plain aliases
+        # of the (already physical) per_step_* lists above, added purely so
+        # callers comparing against a transformer 'shape' checkpoint can use
+        # one key name regardless of source — nn/evaluate.py's 'shape' block
+        # computes its plain per_step_* keys in log-space (matching the
+        # training loss) and only exposes physical numbers under the
+        # '_phys' suffix; this baseline has no log-space representation to
+        # begin with, so its '_phys' keys are identical to its plain ones.
+        # Per-frequency-bin metrics (FINAL forecast step only) — same
+        # formula/keys as nn/evaluate.py's shape block (SI[i] = RMSE_i /
+        # mean(E_true_i)), no M0_MASK_THRESHOLD masking (same reasoning as
+        # the 'density' branch above doesn't apply — prepare_y discards m₀
+        # for 'shape').
+        pred_final_bin = y_pred_np[:, -1, :]   # (num_samples, num_freqs)
+        true_final_bin = y_true_np[:, -1, :]
+        pers_final_bin = y_pers_np[:, -1, :]
+        rmse_per_bin_shape      = np.sqrt(((pred_final_bin - true_final_bin) ** 2).mean(axis=0))
+        rmse_per_bin_pers_shape = np.sqrt(((pers_final_bin - true_final_bin) ** 2).mean(axis=0))
+        bias_per_bin_shape      = (pred_final_bin - true_final_bin).mean(axis=0)
+        mean_per_bin_shape      = true_final_bin.mean(axis=0).clip(min=1e-12)
+        si_per_bin_shape        = rmse_per_bin_shape / mean_per_bin_shape
+
+        # 1-D Wasserstein (earth-mover) distance — see nn/evaluate.py's
+        # shape block, which this mirrors key-for-key. SpectralWassersteinLoss
+        # expects LOG-space input (it exponentiates internally); this
+        # baseline never leaves physical space, so log() it back in just for
+        # this call, clamped away from 0 (a handful of bins can be exactly
+        # 0.0 for a genuinely calm/degenerate sample).
+        wasserstein_fn = SpectralWassersteinLoss()
+        freqs_t = torch.from_numpy(freqs_np).float()
+        log_pred = torch.log(y_pred.clamp(min=1e-12))
+        log_true = torch.log(y_true.clamp(min=1e-12))
+        log_pers = torch.log(y_pers.clamp(min=1e-12))
+
+        per_step_wasserstein, per_step_wasserstein_pers = [], []
+        for step in range(lead_time):
+            per_step_wasserstein.append(
+                wasserstein_fn(log_pred[:, step, :], log_true[:, step, :], freqs_t).item())
+            per_step_wasserstein_pers.append(
+                wasserstein_fn(log_pers[:, step, :], log_true[:, step, :], freqs_t).item())
+
+        wasserstein_per_bin_shape = wasserstein_fn(
+            log_pred[:, -1, :], log_true[:, -1, :], freqs_t, reduction='per_bin'
+        ).mean(dim=0).numpy()
+        wasserstein_per_bin_pers_shape = wasserstein_fn(
+            log_pers[:, -1, :], log_true[:, -1, :], freqs_t, reduction='per_bin'
+        ).mean(dim=0).numpy()
+
         metrics.update({
+            'per_step_RMSE_phys': per_step_rmse,
+            'per_step_RMSE_pers_phys': per_step_rmse_pers,
+            'per_step_SS_phys': per_step_ss,
+            'per_step_Bias_phys': per_step_bias,
+            'RMSE_per_bin': rmse_per_bin_shape.tolist(),
+            'RMSE_per_bin_pers': rmse_per_bin_pers_shape.tolist(),
+            'Bias_per_bin': bias_per_bin_shape.tolist(),
+            'SI_per_bin': si_per_bin_shape.tolist(),
+            'per_step_Wasserstein': per_step_wasserstein,
+            'per_step_Wasserstein_pers': per_step_wasserstein_pers,
+            'Wasserstein_per_bin': wasserstein_per_bin_shape.tolist(),
+            'Wasserstein_per_bin_pers': wasserstein_per_bin_pers_shape.tolist(),
             'Shape_RMSE': per_step_rmse[-1],
             'Shape_SS': per_step_ss[-1],
+            'Shape_Wasserstein': per_step_wasserstein[-1],
         })
 
     return metrics

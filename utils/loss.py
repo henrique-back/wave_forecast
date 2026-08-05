@@ -115,7 +115,7 @@ class SpectralWassersteinLoss(torch.nn.Module):
             'density' target's physical log E(f), which is why it's used
             unchanged for both.
         freqs : torch.Tensor, shape (num_freqs,)
-        reduction : 'mean' | 'none'
+        reduction : 'mean' | 'none' | 'per_bin'
             'mean' (default): scalar, mean W1 distance over every (batch,
             lead_time, ...) axis — used as-is by the training loss.
             'none': returns the per-(batch, lead_time, ...) tensor before
@@ -123,11 +123,23 @@ class SpectralWassersteinLoss(torch.nn.Module):
             must exclude near-zero-mass samples (M0_MASK_THRESHOLD) before
             averaging, the same masking already applied to Shape_RMSE/SS
             there; that requires per-sample values, not a pre-reduced scalar.
+            'per_bin': returns |CDF_pred(f) - CDF_true(f)| itself, shape
+            (..., num_freqs) — the pointwise CDF gap at each frequency
+            BEFORE the final trapz integration collapses it to a scalar.
+            W1 = trapz(this, freqs), so this is W1's per-bin breakdown: how
+            much transport distance is attributable to each part of the
+            spectrum, rather than how far off the raw value at that bin is
+            (which is what an RMSE-per-bin measures). A peak that's shifted
+            by one bin shows up here as a bump straddling the true peak's
+            location, not a spike exactly at it — useful alongside an
+            RMSE-per-bin plot precisely because RMSE punishes that shift as
+            if the mass had vanished rather than moved.
 
         Returns
         -------
-        torch.Tensor — scalar if reduction=='mean', else shape (batch,
-        lead_time, ...) matching the input's leading dims.
+        torch.Tensor — scalar if reduction=='mean'; shape (batch,
+        lead_time, ...) if reduction=='none'; shape (batch, lead_time, ...,
+        num_freqs) if reduction=='per_bin'.
         """
         freqs = freqs.to(y_pred.device)
         pred_phys = torch.exp(y_pred)
@@ -140,14 +152,18 @@ class SpectralWassersteinLoss(torch.nn.Module):
 
         cdf_pred = _cumulative_trapz(pred_norm, freqs)
         cdf_true = _cumulative_trapz(true_norm, freqs)
+        cdf_gap = torch.abs(cdf_pred - cdf_true)
 
-        w1 = torch.trapezoid(torch.abs(cdf_pred - cdf_true), freqs, dim=-1)
+        if reduction == 'per_bin':
+            return cdf_gap
+
+        w1 = torch.trapezoid(cdf_gap, freqs, dim=-1)
         if reduction == 'mean':
             return w1.mean()
         elif reduction == 'none':
             return w1
         else:
-            raise ValueError(f"Unknown reduction {reduction!r}. Valid: 'mean', 'none'")
+            raise ValueError(f"Unknown reduction {reduction!r}. Valid: 'mean', 'none', 'per_bin'")
 
 
 class DirectionalLoss(torch.nn.Module):

@@ -18,9 +18,12 @@ Two comparison families, chosen by the TARGET(s) given:
 - SCALAR family (target 'hs' or 'shape', all experiments must share the SAME
   one — Hs metres and shape unit-area RMSE aren't on comparable scales):
   each checkpoint's own nn/evaluate.py metrics (RMSE, R2, CC, Hs_MAPE/overall_SS
-  etc.), evaluated over the full test set directly — no recombination, no
-  spectrum-only plots (those require a physical E(f), which a lone hs or shape
-  checkpoint doesn't produce).
+  etc.), evaluated over the full test set directly — no recombination.
+  Produces metrics.json and a per_step.png (always physical-space — see the
+  '_phys' key note below); for target='shape' only, also si_per_bin.png,
+  wasserstein_per_bin.png, and example_shapes.png (no summary_bars.png/
+  example_spectra.png — those require a physical E(f), which a lone hs or
+  shape checkpoint doesn't produce).
 
 All experiments in a family are evaluated with the exact same metric
 computation, so results are directly comparable regardless of which path
@@ -59,7 +62,15 @@ Shape_RMSE/Shape_SS are shown in the scalar-family table (see
 SUMMARY_METRICS_SCALAR) rather than the usual RMSE/R2/CC — those are computed
 in log-space for a transformer's 'shape' target (see nn/evaluate.py's
 docstring) and would silently misrepresent a comparison against
-linear_baseline's always-physical numbers.
+linear_baseline's always-physical numbers. The per_step.png plot and the
+metrics.json 'per_step_*_phys' keys sidestep this the same way Shape_RMSE/
+Shape_SS do: nn/evaluate.py's 'shape' block and utils/linear_baseline.py's
+_compute_metrics both expose a '_phys' suffixed variant of every per_step_*
+list, always in physical unit-area shape space, so a transformer checkpoint's
+lead-time curve is honestly comparable to linear_baseline's (or another
+transformer's). The plain (non-'_phys') per_step_* keys remain log-space for
+a 'shape'-target transformer checkpoint — don't plot those against a
+physical source.
 """
 import sys
 import os
@@ -178,7 +189,7 @@ SUMMARY_METRICS = [
 # for every row regardless of source.
 SUMMARY_METRICS_SCALAR = {
     'hs': [('RMSE', 'm'), ('Hs_MAPE', '%'), ('R2', ''), ('CC', '')],
-    'shape': [('Shape_RMSE', '')],
+    'shape': [('Shape_RMSE', ''), ('Shape_Wasserstein', '')],
 }
 
 # Bottom-line Skill Score row per scalar target — 'hs's overall_SS is
@@ -383,6 +394,102 @@ def plot_per_step(results, out_path):
     print(f"  saved {out_path}")
 
 
+def plot_scalar_per_step(results, target, out_path):
+    """Per-step RMSE / Skill Score curve for the SCALAR family ('hs' or
+    'shape'), always in physical units so a transformer checkpoint and
+    linear_baseline plot on the same, honestly comparable axes.
+
+    For target == 'hs', nn/evaluate.py's plain 'per_step_RMSE'/'per_step_SS'
+    are already physical (the 'hs' target never goes through to_log_space —
+    see nn/evaluate.py's docstring NOTE), so those are used directly. For
+    target == 'shape', the plain keys are log-shape-space (matches the
+    training loss) and NOT comparable across sources — use the '_phys'
+    suffix keys nn/evaluate.py's shape block / utils/linear_baseline.py's
+    _compute_metrics both expose instead (see their docstrings). This is
+    exactly the mismatch that made an earlier version of this script's
+    metrics.json quietly plot log-space transformer numbers against
+    physical linear_baseline numbers for a 'shape' comparison.
+    """
+    rmse_key, rmse_pers_key, ss_key = (
+        ('per_step_RMSE_phys', 'per_step_RMSE_pers_phys', 'per_step_SS_phys') if target == 'shape'
+        else ('per_step_RMSE', 'per_step_RMSE_pers', 'per_step_SS'))
+    lead_steps = len(results[0]['metrics'][rmse_key])
+    x = np.arange(1, lead_steps + 1)
+    unit = 'm' if target == 'hs' else '(unit-area)'
+
+    # Wasserstein has no log-space variant to begin with (see
+    # utils.SpectralWassersteinLoss / nn/evaluate.py's shape block
+    # docstring) so there's no '_phys' key to choose between — it's plotted
+    # in its own panel, 'shape' only ('hs' is a bare scalar with no
+    # frequency-axis distribution for a CDF-based distance to apply to).
+    show_wasserstein = target == 'shape'
+    n_panels = 3 if show_wasserstein else 2
+    fig, axes = plt.subplots(1, n_panels, figsize=(5.5 * n_panels, 4))
+
+    ax = axes[0]
+    for r in results:
+        ax.plot(x, r['metrics'][rmse_key], '-o', color=r['color'], label=r['label'], linewidth=2, markersize=5)
+    ax.plot(x, results[0]['metrics'][rmse_pers_key], '--', color=COLOR_PERS, label='Persistence', linewidth=1.5)
+    ax.set_xlabel('Forecast step (hours ahead)')
+    ax.set_ylabel(f'RMSE {unit}')
+    ax.set_title('Per-step RMSE (physical space)')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1]
+    for r in results:
+        ax.plot(x, r['metrics'][ss_key], '-o', color=r['color'], label=r['label'], linewidth=2, markersize=5)
+    ax.axhline(0.0, color=COLOR_PERS, linestyle='--', linewidth=1.5, label='Persistence (SS=0)')
+    ax.set_xlabel('Forecast step (hours ahead)')
+    ax.set_ylabel('Skill Score')
+    ax.set_title('Per-step Skill Score vs persistence (physical space)')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    if show_wasserstein:
+        ax = axes[2]
+        for r in results:
+            ax.plot(x, r['metrics']['per_step_Wasserstein'], '-o', color=r['color'], label=r['label'], linewidth=2, markersize=5)
+        ax.plot(x, results[0]['metrics']['per_step_Wasserstein_pers'], '--', color=COLOR_PERS, label='Persistence', linewidth=1.5)
+        ax.set_xlabel('Forecast step (hours ahead)')
+        ax.set_ylabel('Wasserstein distance')
+        ax.set_title('Per-step Wasserstein (shift-tolerant)')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    labels = [r['label'] for r in results]
+    fig.suptitle(' vs '.join(labels) + f' — {target} target, physical space')
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  saved {out_path}")
+
+
+def plot_wasserstein_per_bin(results, freqs_np, out_path):
+    """Per-frequency-bin breakdown of the FINAL step's Wasserstein
+    (earth-mover) distance — see SpectralWassersteinLoss's
+    reduction='per_bin' and nn/evaluate.py's 'Wasserstein_per_bin' docstring
+    entry. Complementary to plot_si_per_bin's RMSE-based Scatter Index: a
+    peak shifted by a bin or two shows up here as a bump straddling its true
+    location rather than a spike exactly there, since this tracks displaced
+    probability mass, not a pointwise value gap.
+    """
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    for r in results:
+        ax.plot(freqs_np, r['metrics']['Wasserstein_per_bin'], '-', color=r['color'], label=r['label'], linewidth=2)
+    ax.plot(freqs_np, results[0]['metrics']['Wasserstein_per_bin_pers'], '--', color=COLOR_PERS, label='Persistence', linewidth=1.5)
+    ax.set_xscale('log')
+    ax.set_xlabel('Frequency (Hz, log scale)')
+    ax.set_ylabel('Wasserstein contribution (CDF gap)')
+    ax.set_title('Per-frequency-bin Wasserstein distance')
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, which='both')
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  saved {out_path}")
+
+
 def plot_si_per_bin(results, freqs_np, out_path):
     fig, ax = plt.subplots(figsize=(7, 4.5))
     for r in results:
@@ -541,8 +648,19 @@ def main():
             }, f, indent=2)
         print(f"\nSaved metrics.json to {out_dir}")
 
+        print("\nGenerating plots...")
+        plot_scalar_per_step(results, target, out_dir / 'per_step.png')
+        if target == 'shape':
+            # 'hs' has no frequency axis, so a per-bin breakdown only
+            # applies to 'shape' — reuses the spectrum family's plot
+            # function unchanged: it only touches r['metrics']['SI_per_bin'],
+            # which nn/evaluate.py's shape block and linear_baseline's
+            # _compute_metrics both now populate (final step, physical
+            # space — see their docstrings).
+            plot_si_per_bin(results, freqs_np, out_dir / 'si_per_bin.png')
+            plot_wasserstein_per_bin(results, freqs_np, out_dir / 'wasserstein_per_bin.png')
+
         if want_arrays:
-            print("\nGenerating plots...")
             # Same "common t0 range" logic as the spectrum family's
             # example_spectra.png (see main()'s spectrum branch below) —
             # only t0 values covered by every experiment's encoder window
@@ -564,7 +682,7 @@ def main():
                 print("  no forecast-start range common to every experiment — skipping example_shapes.png")
         else:
             print(f"target={target!r} has no frequency axis — skipping example_shapes.png "
-                  f"(and summary_bars/per_step/si_per_bin, spectrum family only).")
+                  f"(and summary_bars/si_per_bin, spectrum family only).")
         print(f"\nDone. All outputs under {out_dir}")
         return
 
