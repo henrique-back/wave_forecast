@@ -141,8 +141,9 @@ def parse_args():
     p.add_argument('--channel-set', default='full', choices=list(CHANNEL_SETS))
     p.add_argument('--aux-set', default='none', choices=list(AUX_CHANNEL_SETS))
     p.add_argument('--n-example-samples', type=int, default=4,
-                   help='Number of example forecast times to plot full spectra for '
-                        '(spectrum family only)')
+                   help='Number of example forecast times to plot full spectra '
+                        '(spectrum family) or unit-area shape curves (scalar '
+                        "family, target='shape' only) for")
     p.add_argument('--out-dir', default=None,
                    help='Where to write metrics.json and plots (default: '
                         'results/comparisons/{name1}_vs_{name2}_vs_.../lead_{N}h)')
@@ -206,16 +207,34 @@ def load_linear_baseline_checkpoint(project_root, target, lead):
 
 
 def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, r_2, wind,
-                freqs, device, channel_set, aux_set):
+                freqs, device, channel_set, aux_set, return_arrays=False):
     """Full test-set nn/evaluate.py metrics for a lone 'hs' or 'shape' checkpoint —
     no spectrum recombination, just that model's own predictions vs its own target.
 
     spec['name'] == 'linear_baseline' is special-cased: loads and scores the
     utils/linear_baseline.py checkpoint instead of a transformer one — see
     load_linear_baseline_checkpoint and the module docstring.
+
+    return_arrays : bool, mirrors nn/evaluate.py::evaluate()'s own flag —
+        if True, additionally returns (pred, true, pers, t0_start): physical
+        arrays, shape (N, lead_time, 1|num_freqs), plus the test-split-
+        relative row index of sample 0's forecast start (same convention as
+        nn/spectrum_eval.py::eval_single_density's t0_start). For
+        target=='shape' the transformer's raw output is log-shape (see
+        nn/evaluate.py's docstring) and is exp()'d here back to the physical
+        unit-area shape so it lines up with linear_baseline's always-
+        physical arrays; target=='hs' is already physical either way, but
+        has no frequency axis so isn't meaningful to plot as a curve — only
+        the 'shape' target actually uses this (see main()'s example-shape-
+        curve plot).
     """
     if spec['name'] == 'linear_baseline':
         ckpt = load_linear_baseline_checkpoint(project_root, spec['target'], lead)
+        if return_arrays:
+            metrics, (pred, true, pers) = evaluate_coeffs(
+                density, freqs, ckpt['coeffs'], ckpt['order'], ckpt['lead_time_steps'],
+                spec['target'], return_arrays=True)
+            return metrics, ckpt['lead_time_steps'], pred, true, pers, ckpt['order']
         metrics = evaluate_coeffs(density, freqs, ckpt['coeffs'], ckpt['order'],
                                   ckpt['lead_time_steps'], spec['target'])
         return metrics, ckpt['lead_time_steps']
@@ -230,6 +249,13 @@ def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, 
         density, alpha_1, alpha_2, r_1, r_2, params['seq_len'], lead_time_steps,
         params['batch_size'], spec['target'], shuffle_seed=seed, wind=wind,
         channel_set=channel_set, aux_set=aux_set)
+    if return_arrays:
+        metrics, (pred, true, pers) = evaluate(model, test_loader, device, freqs,
+                           lead_time=lead_time_steps, freq_means=freq_means,
+                           shape_means=shape_means, return_arrays=True)
+        if spec['target'] == 'shape':
+            pred, true, pers = torch.exp(pred), torch.exp(true), torch.exp(pers)
+        return metrics, lead_time_steps, pred.numpy(), true.numpy(), pers.numpy(), params['seq_len']
     metrics = evaluate(model, test_loader, device, freqs,
                        lead_time=lead_time_steps, freq_means=freq_means,
                        shape_means=shape_means)
@@ -404,6 +430,45 @@ def plot_example_spectra(results, t0_examples, freqs_np, lead_time_steps, out_pa
     print(f"  saved {out_path}")
 
 
+def plot_example_shape_curves(results, t0_examples, freqs_np, lead_time_steps, out_path):
+    """Predicted vs true (vs persistence) unit-area shape curves E(f)/m0 at
+    the FINAL forecast step, for a handful of example forecast-start times —
+    the scalar 'shape'-family counterpart to plot_example_spectra (which
+    needs a physical density spectrum the scalar family doesn't have; 'hs'
+    has no frequency axis at all, so this only applies to 'shape'). Kept as
+    its own function rather than parameterizing plot_example_spectra — the
+    two differ enough in axis label/units/title that sharing one function
+    would need almost as many parameters as just duplicating the ~20 lines,
+    and this way the working spectrum-family plot is untouched.
+
+    Expects each result dict to carry 'true_common'/'pers_common'/
+    'pred_common' arrays already sliced down to t0_examples (see main()).
+    """
+    n = len(t0_examples)
+    fig, axes = plt.subplots(1, n, figsize=(4 * n, 4), sharey=False)
+    if n == 1:
+        axes = [axes]
+    last_step = lead_time_steps - 1
+    ref = results[0]
+    for ax, i, t0 in zip(axes, range(n), t0_examples):
+        ax.plot(freqs_np, ref['true_common'][i, last_step], '-', color=COLOR_TRUE, label='True', linewidth=2)
+        for r in results:
+            ax.plot(freqs_np, r['pred_common'][i, last_step], '-', color=r['color'], label=r['label'], linewidth=1.75)
+        ax.plot(freqs_np, ref['pers_common'][i, last_step], '--', color=COLOR_PERS, label='Persistence', linewidth=1.25)
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('Shape E(f)/m₀ (unit-area)')
+        ax.set_title(f't0={t0} (+{lead_time_steps}h)', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        if i == 0:
+            ax.legend(fontsize=8)
+    labels = [r['label'] for r in results]
+    fig.suptitle(' vs '.join(labels) + f' — example unit-area shape curves at the {lead_time_steps}h horizon')
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  saved {out_path}")
+
+
 def main():
     args = parse_args()
     project_root = Path(__file__).resolve().parent.parent
@@ -439,13 +504,24 @@ def main():
     targets = {spec['target'] for spec in args.experiments}
     if targets <= SCALAR_TARGETS:
         target = next(iter(targets))
+        # 'shape' has a frequency axis (unit-area E(f)/m0), so example-curve
+        # plotting is meaningful there; 'hs' is a bare scalar with nothing to
+        # plot as a curve, so it stays table-only (see the else-branch message
+        # below).
+        want_arrays = (target == 'shape')
         results = []
         for spec in args.experiments:
             print(f"\nEvaluating {spec['label']} (target={spec['target']})")
-            metrics, lead_time_steps = load_scalar(
+            loaded = load_scalar(
                 project_root, spec, args.lead, args.seed, density, alpha_1, alpha_2, r_1, r_2,
-                wind, freqs, device, args.channel_set, args.aux_set)
-            results.append({**spec, 'metrics': metrics, 'lead_time_steps': lead_time_steps})
+                wind, freqs, device, args.channel_set, args.aux_set, return_arrays=want_arrays)
+            if want_arrays:
+                metrics, lead_time_steps, pred, true, pers, t0_start = loaded
+                results.append({**spec, 'metrics': metrics, 'lead_time_steps': lead_time_steps,
+                                'pred': pred, 'true': true, 'pers': pers, 't0_start': t0_start})
+            else:
+                metrics, lead_time_steps = loaded
+                results.append({**spec, 'metrics': metrics, 'lead_time_steps': lead_time_steps})
 
         lead_time_steps = results[0]['lead_time_steps']
         for r in results[1:]:
@@ -464,8 +540,31 @@ def main():
                 ]
             }, f, indent=2)
         print(f"\nSaved metrics.json to {out_dir}")
-        print(f"target={target!r} has no physical spectrum — skipping summary_bars/"
-              f"per_step/si_per_bin/example_spectra (spectrum family only).")
+
+        if want_arrays:
+            print("\nGenerating plots...")
+            # Same "common t0 range" logic as the spectrum family's
+            # example_spectra.png (see main()'s spectrum branch below) —
+            # only t0 values covered by every experiment's encoder window
+            # have directly comparable True/Persistence references.
+            starts = [r['t0_start'] for r in results]
+            ends = [r['t0_start'] + r['pred'].shape[0] - 1 for r in results]
+            common_start, common_end = max(starts), min(ends)
+            if common_end >= common_start:
+                n_examples = min(args.n_example_samples, common_end - common_start + 1)
+                t0_examples = np.linspace(common_start, common_end, n_examples, dtype=int)
+                for r in results:
+                    idx = t0_examples - r['t0_start']
+                    r['true_common'] = r['true'][idx]
+                    r['pers_common'] = r['pers'][idx]
+                    r['pred_common'] = r['pred'][idx]
+                plot_example_shape_curves(results, t0_examples, freqs_np, lead_time_steps,
+                                          out_dir / 'example_shapes.png')
+            else:
+                print("  no forecast-start range common to every experiment — skipping example_shapes.png")
+        else:
+            print(f"target={target!r} has no frequency axis — skipping example_shapes.png "
+                  f"(and summary_bars/per_step/si_per_bin, spectrum family only).")
         print(f"\nDone. All outputs under {out_dir}")
         return
 
