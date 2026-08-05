@@ -42,6 +42,24 @@ Usage:
 Each --experiment is repeatable (2 or more required) and formatted as
 NAME:TARGET[:LABEL], where TARGET is 'density', 'combined', 'hs', or 'shape'
 and LABEL defaults to NAME if omitted.
+
+The name 'linear_baseline' is special: instead of a transformer checkpoint
+(scripts/train.py), it loads the simple linear AR baseline
+(utils/linear_baseline.py) checkpoint saved by scripts/train_linear_baseline.py
+for the given TARGET/--lead (no --seed — that baseline is deterministic), and
+folds it in as one more entry, e.g.:
+
+    python scripts/compare_versions.py \
+        --experiment shape_v11:shape --experiment shape_v12:shape \
+        --experiment linear_baseline:shape --lead 24
+
+'combined' is not a valid TARGET for linear_baseline (no hs+shape
+recombination story for it). For target 'shape' specifically, only
+Shape_RMSE/Shape_SS are shown in the scalar-family table (see
+SUMMARY_METRICS_SCALAR) rather than the usual RMSE/R2/CC — those are computed
+in log-space for a transformer's 'shape' target (see nn/evaluate.py's
+docstring) and would silently misrepresent a comparison against
+linear_baseline's always-physical numbers.
 """
 import sys
 import os
@@ -56,6 +74,7 @@ import torch
 import matplotlib.pyplot as plt
 
 from utils import get_freqs, get_device
+from utils.linear_baseline import forecast_coeffs, evaluate_coeffs
 from nn import evaluate
 from nn.checkpoints import find_checkpoint, build_model
 from nn.spectrum_eval import eval_single_density, eval_combined, compute_density_metrics
@@ -80,6 +99,10 @@ CATEGORICAL_PALETTE = [
 ]
 COLOR_TRUE = '#0b0b0b'
 COLOR_PERS = '#898781'
+# Distinct from both COLOR_PERS (gray) and every CATEGORICAL_PALETTE hue, so
+# an --experiment linear_baseline:... entry is never visually confused with
+# a transformer --experiment or with persistence.
+COLOR_LINEAR = '#a05a2c'
 
 
 def parse_experiment_spec(s):
@@ -93,6 +116,10 @@ def parse_experiment_spec(s):
         raise argparse.ArgumentTypeError(
             f"target must be one of {sorted(SPECTRUM_TARGETS | SCALAR_TARGETS)}, "
             f"got {target!r} (in {s!r})")
+    if name == 'linear_baseline' and target == 'combined':
+        raise argparse.ArgumentTypeError(
+            "linear_baseline has no 'combined' variant (no hs+shape recombination "
+            "story for it) — use 'density', 'hs', or 'shape'.")
     return {'name': name, 'target': target, 'label': label}
 
 
@@ -139,16 +166,60 @@ SUMMARY_METRICS = [
 # Scalar family: a lone 'hs' or 'shape' checkpoint has no physical spectrum to
 # derive Hs_RMSE/Tm02_RMSE/Shape_RMSE/SI from — these are nn/evaluate.py's own
 # metrics for that target, evaluated directly (see load_scalar).
+#
+# 'shape' deliberately shows Shape_RMSE only, not the usual RMSE/R2/CC:
+# nn/evaluate.py computes those top-level metrics in LOG-space for the
+# 'shape' target (see its docstring), so they are NOT comparable across an
+# arbitrary set of rows — in particular not against a linear_baseline:shape
+# row (utils/linear_baseline.py never leaves physical space). Shape_RMSE is
+# explicitly exp()'d back to physical units in nn/evaluate.py and is also
+# what utils/linear_baseline.py reports under that same key, so it's safe
+# for every row regardless of source.
 SUMMARY_METRICS_SCALAR = {
     'hs': [('RMSE', 'm'), ('Hs_MAPE', '%'), ('R2', ''), ('CC', '')],
-    'shape': [('RMSE', ''), ('R2', ''), ('CC', '')],
+    'shape': [('Shape_RMSE', '')],
 }
+
+# Bottom-line Skill Score row per scalar target — 'hs's overall_SS is
+# physical (safe to show); 'shape's overall_SS is log-space (see above), so
+# Shape_SS (physical, same reasoning as Shape_RMSE) is shown instead.
+SS_KEY_SCALAR = {'hs': 'overall_SS', 'shape': 'Shape_SS'}
+
+
+def load_linear_baseline_checkpoint(project_root, target, lead):
+    """Load the checkpoint scripts/train_linear_baseline.py saves —
+    {'coeffs', 'order', 'ridge', 'target', 'lead_time_steps', 'freqs',
+    'buoy_id'} — for a given target/lead. Unlike find_checkpoint (transformer
+    checkpoints), this isn't seed- or experiment-namespaced: the linear
+    baseline only depends on (buoy, target, lead), not on channel_set/
+    aux_set/architecture, so results/linear_baseline/ is shared across every
+    --experiment comparison for that target/lead.
+    """
+    path = (project_root / 'results' / 'linear_baseline' / target
+             / f'lead_{lead}h' / 'linear_baseline_final.pt')
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No linear baseline checkpoint at {path} — run "
+            f"scripts/train_linear_baseline.py first (target={target!r}, lead={lead}h).")
+    print(f"Loaded linear baseline checkpoint from {path}")
+    return torch.load(path, map_location='cpu', weights_only=False)
 
 
 def load_scalar(project_root, spec, lead, seed, density, alpha_1, alpha_2, r_1, r_2, wind,
                 freqs, device, channel_set, aux_set):
     """Full test-set nn/evaluate.py metrics for a lone 'hs' or 'shape' checkpoint —
-    no spectrum recombination, just that model's own predictions vs its own target."""
+    no spectrum recombination, just that model's own predictions vs its own target.
+
+    spec['name'] == 'linear_baseline' is special-cased: loads and scores the
+    utils/linear_baseline.py checkpoint instead of a transformer one — see
+    load_linear_baseline_checkpoint and the module docstring.
+    """
+    if spec['name'] == 'linear_baseline':
+        ckpt = load_linear_baseline_checkpoint(project_root, spec['target'], lead)
+        metrics = evaluate_coeffs(density, freqs, ckpt['coeffs'], ckpt['order'],
+                                  ckpt['lead_time_steps'], spec['target'])
+        return metrics, ckpt['lead_time_steps']
+
     ckpt, _ = find_checkpoint(project_root, spec['name'], spec['target'], 1, lead, seed)
     model = build_model(ckpt, freqs, device, channel_set, aux_set)
     freq_means = ckpt['freq_means'].to(device)
@@ -176,7 +247,8 @@ def print_scalar_comparison(results, target):
         for r in results:
             row += f"{r['metrics'][key]:>15.4f} {unit:<2}"
         print(row)
-    print(f"{'overall_SS':<{col_w}}" + ''.join(f"{r['metrics']['overall_SS']:>18.4f}" for r in results))
+    ss_key = SS_KEY_SCALAR[target]
+    print(f"{ss_key:<{col_w}}" + ''.join(f"{r['metrics'][ss_key]:>18.4f}" for r in results))
 
     if len(results) > 1:
         base = results[0]
@@ -338,13 +410,26 @@ def main():
     device = get_device()
     print(f"Device: {device}")
 
-    if len(args.experiments) > len(CATEGORICAL_PALETTE):
-        print(f"  warning: {len(args.experiments)} experiments requested but only "
+    # linear_baseline gets its own fixed color (not a categorical slot) so
+    # it reads visually as "the baseline", not just another experiment, and
+    # so its color stays stable regardless of where it falls in the --experiment
+    # order or how many real experiments are also being compared.
+    real_experiments = [s for s in args.experiments if s['name'] != 'linear_baseline']
+    if len(real_experiments) > len(CATEGORICAL_PALETTE):
+        print(f"  warning: {len(real_experiments)} experiments requested but only "
               f"{len(CATEGORICAL_PALETTE)} categorical colors are defined — colors will repeat.")
-    for i, spec in enumerate(args.experiments):
+    for i, spec in enumerate(real_experiments):
         spec['color'] = CATEGORICAL_PALETTE[i % len(CATEGORICAL_PALETTE)]
+    for spec in args.experiments:
+        if spec['name'] == 'linear_baseline':
+            spec['color'] = COLOR_LINEAR
 
-    density, alpha_1, alpha_2, r_1, r_2, wind = pd.read_pickle(project_root / 'buoy_data' / '42056' / 'processed_data.pkl')
+    # Must match the buoy every checkpoint-producing script (scripts/train.py,
+    # scripts/optimize.py, scripts/infer.py, scripts/train_linear_baseline.py)
+    # actually trains on — a prior commit had silently drifted this to '42056'
+    # with no comment/rationale, which meant every comparison here was scored
+    # against the wrong buoy's data.
+    density, alpha_1, alpha_2, r_1, r_2, wind = pd.read_pickle(project_root / 'buoy_data' / '32012' / 'processed_data.pkl')
     freqs = get_freqs(density)
     freqs_np = freqs.cpu().numpy() if torch.is_tensor(freqs) else np.asarray(freqs)
 
@@ -385,6 +470,15 @@ def main():
         return
 
     def load(spec):
+        if spec['name'] == 'linear_baseline':
+            # target == 'density' is enforced by parse_experiment_spec (no
+            # 'combined' variant). Always physical, like every other source
+            # eval_single_density/eval_combined can return — see
+            # nn/spectrum_eval.py::compute_density_metrics's docstring.
+            ckpt = load_linear_baseline_checkpoint(project_root, 'density', args.lead)
+            pred, true, pers = forecast_coeffs(
+                density, freqs, ckpt['coeffs'], ckpt['order'], ckpt['lead_time_steps'], 'density')
+            return pred, true, pers, ckpt['lead_time_steps'], ckpt['order']
         if spec['target'] == 'density':
             # deltat is not yet a CLI option here — 1 matches this script's
             # previous (undownsampled) behavior; find_checkpoint still falls

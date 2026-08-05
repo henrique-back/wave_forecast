@@ -174,7 +174,7 @@ EXPERIMENT_DESCRIPTION = (
 )
 
 # Set parameters
-lead_times_hours = [24, 48]
+lead_times_hours = [48]
 target = "shape"
 # With 10 tunable hyperparameters (4 categorical, 2 int, 4 continuous —
 # wasserstein_loss_weight added in v12), n_startup_trials=15 gives
