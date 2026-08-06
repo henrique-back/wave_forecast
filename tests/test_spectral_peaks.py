@@ -31,22 +31,22 @@ def _bimodal(freqs):
 class TestFindSpectralPeaks:
     def test_single_jonswap_has_one_peak(self):
         spectrum = _jonswap(FREQS, 2.0, 10.0)
-        peaks = find_spectral_peaks(spectrum)
+        peaks = find_spectral_peaks(FREQS, spectrum)
         assert len(peaks) == 1
 
     def test_sum_of_two_separated_jonswaps_has_two_peaks(self):
         spectrum = _bimodal(FREQS)
-        peaks = find_spectral_peaks(spectrum)
+        peaks = find_spectral_peaks(FREQS, spectrum)
         assert len(peaks) == 2
 
     def test_zero_spectrum_returns_empty_without_raising(self):
         spectrum = np.zeros_like(FREQS)
-        peaks = find_spectral_peaks(spectrum)
+        peaks = find_spectral_peaks(FREQS, spectrum)
         assert len(peaks) == 0
 
     def test_flat_spectrum_returns_empty_without_raising(self):
         spectrum = np.ones_like(FREQS)
-        peaks = find_spectral_peaks(spectrum)
+        peaks = find_spectral_peaks(FREQS, spectrum)
         assert len(peaks) == 0
 
 
@@ -58,7 +58,7 @@ class TestPeakModalityMetrics:
         true = np.stack([unimodal, bimodal])
         pred = true.copy()
 
-        metrics, mask = peak_modality_metrics(pred, true)
+        metrics, mask = peak_modality_metrics(FREQS, pred, true)
 
         assert list(mask) == [False, True]
         assert metrics['Peak_Count_True_Mean'] == pytest.approx(1.5)
@@ -73,39 +73,42 @@ class TestPeakModalityMetrics:
         catches that failure, not just that the code runs.
         """
         true = _bimodal(FREQS)
-        true_peaks = find_spectral_peaks(true)
+        true_peaks = find_spectral_peaks(FREQS, true)
         assert len(true_peaks) == 2  # precondition for this test to mean anything
 
-        # size=9 uniform smoothing merges the two peaks into a single hump
-        # that sits near, but not within bin_tolerance of, the first true
-        # peak and far from the second — recalling exactly one of two.
-        pred = uniform_filter1d(true, size=9)
-        pred_peaks = find_spectral_peaks(pred)
+        # size=15 uniform smoothing merges the two peaks into a single hump
+        # that sits outside bin_tolerance of BOTH true peaks — recalling
+        # neither. (Under the Portilla et al. criteria a lighter blur, e.g.
+        # size=9, still resolves two distinct significant peaks — the
+        # min_bins/energy_frac test is more forgiving of a widened-but-
+        # still-separated hump than the old prominence threshold was.)
+        pred = uniform_filter1d(true, size=15)
+        pred_peaks = find_spectral_peaks(FREQS, pred)
         assert len(pred_peaks) == 1  # confirms the blur actually merged them
 
-        metrics, mask = peak_modality_metrics(pred[np.newaxis, :], true[np.newaxis, :])
+        metrics, mask = peak_modality_metrics(FREQS, pred[np.newaxis, :], true[np.newaxis, :])
 
         assert mask[0]  # true spectrum is still multimodal
         assert metrics['Peak_Count_Pred_Mean'] == pytest.approx(1.0)
-        assert metrics['Peak_Separation_Recall'] == pytest.approx(0.5)
+        assert metrics['Peak_Separation_Recall'] == pytest.approx(0.0)
         assert metrics['Peak_Height_RelError'] > 0.0
 
     def test_missed_secondary_peak_gives_finite_relative_error(self):
         """A small-but-real secondary peak that the model's prediction
         completely lacks must still produce a finite (not inf/nan)
         Peak_Height_RelError — no divide-by-zero blowup, since every
-        detected peak's height is bounded below by prominence_frac *
-        spectrum.max() > 0 by construction.
+        detected peak's height is bounded below by the Portilla et al.
+        (2009) energy_frac * E_total criterion > 0 by construction.
         """
         primary = _jonswap(FREQS, 2.0, 8.0)
         secondary = _jonswap(FREQS, 1.0, 16.0)
         true = primary + secondary
         pred = primary  # model produces only the primary peak
 
-        assert len(find_spectral_peaks(true)) == 2
-        assert len(find_spectral_peaks(pred)) == 1
+        assert len(find_spectral_peaks(FREQS, true)) == 2
+        assert len(find_spectral_peaks(FREQS, pred)) == 1
 
-        metrics, mask = peak_modality_metrics(pred[np.newaxis, :], true[np.newaxis, :])
+        metrics, mask = peak_modality_metrics(FREQS, pred[np.newaxis, :], true[np.newaxis, :])
 
         assert mask[0]
         assert np.isfinite(metrics['Peak_Height_RelError'])

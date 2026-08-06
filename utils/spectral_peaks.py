@@ -1,50 +1,66 @@
 import numpy as np
-from scipy.signal import find_peaks
+
+from .spectral_partitioning import find_significant_peaks
 
 
-def find_spectral_peaks(spectrum, prominence_frac=0.25):
+def find_spectral_peaks(freqs, spectrum, f_max=0.4, energy_frac=0.05, min_bins=2):
     """
-    Detect local-maxima bin indices in a single 1-D spectrum.
+    Detect physically-significant peak bin indices in a single 1-D spectrum.
 
-    prominence_frac is relative to THIS spectrum's own max, not a global
-    constant — makes the detector scale-free across samples of very
-    different energy (works the same on a unit-area 'shape' spectrum or a
-    physical 'density' spectrum spanning orders of magnitude in m0).
+    Thin wrapper around utils.spectral_partitioning.find_significant_peaks —
+    the Portilla et al. (2009, section 2b.2) four-criterion spurious-peak
+    test:
+      1. fp > f_max (0.35-0.4 Hz) — reject high-frequency tail noise.
+      2. partition energy < energy_frac * E_total — reject peaks that carry
+         too small a share of the spectrum's total energy to be a real,
+         separate wave system.
+      3. fewer than min_bins spectral bins on either side of the peak before
+         the next trough — reject peaks too narrow to be resolved by the
+         grid.
+      4. the peak sits between two higher-energy neighboring peaks (a local
+         "sandwich") — reject a minor ripple riding on the shoulder of a
+         bigger partition.
 
-    0.25 was chosen empirically (not the initial 0.08 guess) by sweeping
-    prominence_frac over shape_v11's full lead_12h test set: 0.08 counted
-    an implausible mean of ~2.9 "peaks" per true spectrum (85% of samples
-    flagged multimodal) — clearly picking up minor ripples, not distinct
-    wave systems. 0.25 gives a mean of ~1.6 peaks (49% multimodal, a much
-    more balanced and physically plausible split) while still resolving
-    exactly the 2 real peaks on a known visually-bimodal sample
-    (results/shape_v11/shape/lead_12h/inference_plots/sample_2572.png)
-    consistently across prominence_frac in [0.15, 0.30] — i.e. 0.25 sits
-    in the middle of a stable range, not right at a knife-edge threshold.
+    This replaces the earlier scale-free prominence_frac=0.25 heuristic
+    (chosen by sweeping prominence_frac over shape_v11's lead_12h test set
+    until the mean peak count "looked" physically plausible — see git
+    history) with published, physically-motivated criteria that don't
+    depend on tuning a constant against one buoy's visual impression of how
+    many peaks are real.
 
-    Note: scipy.signal.find_peaks cannot flag a peak at index 0 or -1 (no
-    two-sided neighbor to compare against). Per CLAUDE.md the buoy's
-    0.02-0.485 Hz grid has density ~0 at both ends for typical sea states,
-    so this is a rare edge case — documented here rather than engineered
-    around.
+    Note: as with the old prominence-based detector, scipy.signal.find_peaks
+    (used internally by find_significant_peaks) cannot flag a peak at index
+    0 or -1 (no two-sided neighbor to compare against). Per CLAUDE.md the
+    buoy's 0.02-0.485 Hz grid has density ~0 at both ends for typical sea
+    states, so this is a rare edge case — documented here rather than
+    engineered around.
 
     Parameters
     ----------
+    freqs    : np.ndarray, shape (num_freqs,) — frequency grid [Hz].
+               Required (unlike the old prominence-only detector) because
+               criteria 1 and 2 are physical, not bin-index, quantities.
     spectrum : np.ndarray, shape (num_freqs,)
-    prominence_frac : float
+    f_max, energy_frac, min_bins : forwarded to
+        utils.spectral_partitioning.find_significant_peaks — see its
+        docstring for the full criteria definitions.
 
     Returns
     -------
     np.ndarray[int] — peak bin indices (possibly empty).
     """
+    freqs = np.asarray(freqs)
     spectrum = np.asarray(spectrum)
     if spectrum.size == 0 or spectrum.max() <= 0:
         return np.array([], dtype=int)
-    peaks, _ = find_peaks(spectrum, prominence=spectrum.max() * prominence_frac)
-    return peaks
+    peaks = find_significant_peaks(
+        freqs, spectrum, f_max=f_max, energy_frac=energy_frac, min_bins=min_bins
+    )
+    return np.array(peaks, dtype=int)
 
 
-def peak_modality_metrics(pred_final, true_final, prominence_frac=0.25, bin_tolerance=2):
+def peak_modality_metrics(freqs, pred_final, true_final, f_max=0.4, energy_frac=0.05,
+                           min_bins=2, bin_tolerance=2):
     """
     Peak-fidelity metrics for a batch of final-forecast-step spectra, aimed
     at surfacing the multimodal (double/triple-peaked) sea-state failure
@@ -53,20 +69,24 @@ def peak_modality_metrics(pred_final, true_final, prominence_frac=0.25, bin_tole
     whole grid, even when the model badly misses its height or blurs two
     peaks into one smoothed hump.
 
-    Both inputs must already be physical / linear (i.e. exp()'d out of
-    log-space by the caller) and on the same frequency grid (peaks are
-    compared by aligned bin index, not by Hz — no `freqs` argument needed).
+    Both spectra inputs must already be physical / linear (i.e. exp()'d out
+    of log-space by the caller) and on the SAME frequency grid `freqs` (both
+    for peak detection — see find_spectral_peaks — and for peaks being
+    compared by aligned bin index, not by Hz).
 
     Parameters
     ----------
+    freqs : np.ndarray, shape (num_freqs,) — frequency grid [Hz], forwarded
+        to find_spectral_peaks for both pred and true spectra.
     pred_final, true_final : np.ndarray, shape (N, num_freqs)
-    prominence_frac : float — forwarded to find_spectral_peaks for both
-        pred and true spectra.
+    f_max, energy_frac, min_bins : forwarded to find_spectral_peaks (the
+        Portilla et al. 2009 significant-peak criteria) for both pred and
+        true spectra.
     bin_tolerance : int — a true peak counts as "separated" by the model
-        if any predicted peak (detected with the SAME prominence_frac) lies
+        if any predicted peak (detected with the SAME criteria) lies
         within this many bins of it — i.e. the model's own curve must show
-        a locally-prominent max near the true peak, not just a non-zero
-        value there.
+        a physically-significant local max near the true peak, not just a
+        non-zero value there.
 
     Returns
     -------
@@ -101,8 +121,8 @@ def peak_modality_metrics(pred_final, true_final, prominence_frac=0.25, bin_tole
     n_recalled = 0
 
     for i in range(n):
-        true_peaks = find_spectral_peaks(true_final[i], prominence_frac)
-        pred_peaks = find_spectral_peaks(pred_final[i], prominence_frac)
+        true_peaks = find_spectral_peaks(freqs, true_final[i], f_max, energy_frac, min_bins)
+        pred_peaks = find_spectral_peaks(freqs, pred_final[i], f_max, energy_frac, min_bins)
         true_counts[i] = len(true_peaks)
         pred_counts[i] = len(pred_peaks)
 

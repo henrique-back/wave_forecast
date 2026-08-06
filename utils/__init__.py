@@ -10,4 +10,5 @@ from .get_device import get_device, empty_cache
 from .data_processing import data_processing, process_wind
 from .save_progress import save_progress
 from .loss import RMSELoss, DirectionalLoss, SpectralWassersteinLoss
+from .spectral_partitioning import classify_partition, classify_partitions, find_significant_peaks
 from .spectral_peaks import find_spectral_peaks, peak_modality_metrics

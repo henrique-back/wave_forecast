@@ -5,8 +5,9 @@ why it helps on multimodal (double/triple-peaked) sea states specifically.
 
 Runs one full autoregressive test-set pass (nn.evaluate.evaluate, same as
 scripts/infer.py --aggregate), then — at a single chosen forecast step —
-uses utils.find_spectral_peaks to bucket every test sample by true peak
-count, and picks one representative unimodal sample (peak count == 1) and
+uses utils.find_spectral_peaks (Portilla et al. 2009 significant-peak
+criteria) to bucket every test sample by true peak count, and picks one
+representative unimodal sample (peak count == 1) and
 one representative multimodal sample (peak count >= 2): the one closest to
 the MEDIAN per-sample Wasserstein error within its bucket, so the plot shows
 a typical case rather than a cherry-picked best/worst one.
@@ -65,7 +66,15 @@ def parse_args():
         "Default -1 = final/deliverable forecast step, matching the "
         "convention nn/evaluate.py uses for its bulk-parameter block.",
     )
-    p.add_argument("--prominence-frac", type=float, default=0.25)
+    p.add_argument("--f-max", type=float, default=0.4,
+                    help="Portilla et al. (2009) high-frequency tail cutoff [Hz] "
+                    "for significant-peak detection (utils.find_spectral_peaks)")
+    p.add_argument("--energy-frac", type=float, default=0.05,
+                    help="Min fraction of total spectral energy a partition must "
+                    "carry to count as a significant peak")
+    p.add_argument("--min-bins", type=int, default=2,
+                    help="Min bins required on each side of a peak before the "
+                    "next trough for it to count as significant")
     p.add_argument(
         "--unimodal-index", type=int, default=None,
         help="Override auto-selected unimodal sample with this test-set index",
@@ -176,7 +185,8 @@ def main():
     w1_pers_all = wasserstein_fn(y_pers_step, y_true_step, freqs, reduction="none").numpy()
 
     peak_counts = np.array(
-        [len(find_spectral_peaks(true_np[i], args.prominence_frac)) for i in range(true_np.shape[0])]
+        [len(find_spectral_peaks(freqs_np, true_np[i], args.f_max, args.energy_frac, args.min_bins))
+         for i in range(true_np.shape[0])]
     )
     unimodal_mask = peak_counts == 1
     multimodal_mask = peak_counts >= 2

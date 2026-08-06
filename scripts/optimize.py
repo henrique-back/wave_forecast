@@ -277,6 +277,33 @@ if not _meta_path.exists():
     )
 
 
+# Different lead-time studies (12h/24h/48h) all share one
+# optuna_study_{STUDY_VERSION}.db file and are commonly launched as separate
+# concurrent processes. Plain sqlite:/// gives each writer only Python
+# sqlite3's default 5s busy-timeout, which isn't always enough under
+# contention -- a collision there surfaces as optuna.exceptions.
+# StorageInternalError ("exceeding max length" is just the generic message
+# text) during a trial's final state/value commit, crashing the whole run
+# and leaving that trial stuck as RUNNING forever. `timeout` makes each
+# connection wait out a lock instead of erroring immediately, which is
+# enough by itself since contention windows here are just brief per-trial
+# commits, not sustained overlapping writes.
+#
+# Deliberately NOT switching journal_mode to WAL despite WAL being the more
+# thorough fix for concurrent writers: the VS Code "Optuna Dashboard"
+# extension (right-click a .db file -> Open in Optuna Dashboard) reads the
+# file through a single-file sqlite-wasm VFS in the browser sandbox that
+# can't follow a WAL database's paired .db-wal/.db-shm side files, and its
+# own bundled code (dist/web/storage.worker.js) force-runs
+# `pragma journal_mode=DELETE` the instant it opens a file. Point it at a
+# WAL-mode db and it reads a stale/incomplete single-file snapshot -- this
+# broke the extension for the *entire* study history, not just new trials,
+# the first time it was tried.
+storage = optuna.storages.RDBStorage(
+    url=f"sqlite:///optuna_study_{STUDY_VERSION}.db",
+    engine_kwargs={"connect_args": {"timeout": 30}},
+)
+
 for lead_time_hours in lead_times_hours:
     print(f"\n=== Optimizing for lead_time={lead_time_hours}h ===")
 
@@ -339,7 +366,7 @@ for lead_time_hours in lead_times_hours:
     )
     study = optuna.create_study(
         study_name=study_name,
-        storage=f"sqlite:///optuna_study_{STUDY_VERSION}.db",
+        storage=storage,
         direction="maximize",
         load_if_exists=True,
         sampler=sampler,

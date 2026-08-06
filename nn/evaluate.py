@@ -263,7 +263,12 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     (correctly predicted) shoulders/tail. These metrics use
     utils.peak_modality_metrics (scipy.signal.find_peaks under the hood,
     prominence relative to each spectrum's own max) to surface that failure
-    mode directly, using the FINAL forecast step only:
+    mode directly, using the FINAL forecast step only. As of the 2026-08-06
+    switch to utils.spectral_partitioning, peak detection here is the
+    Portilla et al. (2009) four-criterion significant-peak test (frequency
+    cutoff, minimum partition energy fraction, minimum bin width, no
+    "sandwiched" ripples) rather than scipy.signal.find_peaks with a
+    prominence threshold relative to each spectrum's own max:
         'Peak_Count_True_Mean' : float, mean number of detected peaks in the
                                true spectrum. Compare against
                                'Peak_Count_Pred_Mean' — a model that
@@ -704,7 +709,7 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
         if compute_peak_metrics:
             peak_metrics, multimodal_mask = peak_modality_metrics(
-                pred_final.numpy(), true_final.numpy())
+                freqs_np, pred_final.numpy(), true_final.numpy())
             mask_t = torch.from_numpy(multimodal_mask)
 
             def _bucket(mask):
