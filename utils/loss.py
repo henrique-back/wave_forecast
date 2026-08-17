@@ -405,3 +405,237 @@ class DirectionalLoss(torch.nn.Module):
         components = {'L_E': L_E, 'L_alpha1': L_alpha1,
                       'L_alpha2': L_alpha2, 'L_r': L_r}
         return total, components
+
+
+class SoftPeakHeightLoss(torch.nn.Module):
+    """
+    Differentiable "soft peak height" loss — a third auxiliary term,
+    complementary to SpectralWassersteinLoss, aimed at a failure mode W1
+    structurally underweights: a peak collapsing/broadening into its
+    immediate neighbours while the total mass transported stays small
+    (little distance travelled, even though the peak's own amplitude is
+    destroyed). W1 measures how far mass moved; this measures whether the
+    peak's own height survived, and is by construction invariant to pure
+    translation (a shifted-but-otherwise-intact peak scores ~0 here,
+    since it only compares a window's effective max against itself,
+    positionless) — the two terms are meant to be summed, each covering
+    the other's blind spot, not to replace one another.
+
+    Motivation for softmax over max(): max() has (sub)gradient exactly 0
+    everywhere except the single winning bin, and that winning bin can
+    flip discontinuously between training steps — no usable gradient
+    signal for a training loss. softmax turns the winner-take-all argmax
+    into a normalised, confidence-weighted average of the spectrum
+    against itself:
+
+        sigma_k(i; tau) = exp(E(f_i)/tau) / sum_{j in window_k} exp(E(f_j)/tau)
+        H_k(tau)        = sum_{i in window_k} E(f_i) * sigma_k(i; tau)
+
+    tau interpolates between the two degenerate cases this replaces:
+    tau -> infinity gives sigma_k -> uniform (H_k -> the window's plain
+    mean); tau -> 0 gives sigma_k -> one-hot at the argmax (H_k -> max()).
+    For any finite tau > 0 this is smooth — every bin in the window gets
+    nonzero gradient, weighted by its own current softmax confidence (see
+    tests below for the closed-form gradient identity this relies on:
+    d H_k/d E_j = sigma_j * [1 + (E_j - H_k)/tau], which sums to exactly 1
+    over the window).
+
+    Per-peak temperature tau_k, corrected relative to a naive
+    "tau_k = c * window_width_in_bins" formulation in two ways:
+      1. Window width MUST be measured in Hz (freqs[right]-freqs[left]),
+         not bin count — the buoy grid is log-spaced and non-uniform
+         (dense ~0.005 Hz steps below 0.1 Hz, coarse ~0.02 Hz steps above
+         0.365 Hz), so two partitions with the same bin count can span
+         very different physical bandwidths depending on where they sit
+         on the grid — the same caveat nn/freq_embedding.py's
+         FreqDimEmbedding already documents for its own log-frequency
+         encoding.
+      2. tau must be scaled by the peak's own energy (H_k^true), not by
+         window width alone — exp(E_i/tau) is only meaningful when tau is
+         in E's own units (spectral density, e.g. m^2/Hz), not frequency's.
+         A width-only tau makes the softmax's sharpness swing wildly
+         between calm and stormy samples that happen to have similarly
+         SHAPED (same relative bandwidth) partitions, since E's absolute
+         scale has nothing to do with a window's width in Hz — e.g. the
+         same window width would leave a calm-sea peak's softmax sensibly
+         soft while making a storm sample's near-hard-argmax again (the
+         exact problem softmax was introduced to avoid), even though nothing
+         about the PARTITION's shape changed, only the sea state's energy.
+    Combining both, tau_k is a fixed fraction of the peak's own height,
+    modulated by that peak's bandwidth relative to the grid's total span
+    (dimensionless ratio) — narrow (swell) partitions get a small,
+    sharp/near-max tau; wide (wind-sea) partitions get a larger, softer
+    tau, matching the fact that a broad wind-sea peak genuinely doesn't
+    have as sharply-defined a "height" as a narrow swell peak:
+
+        tau_k = max(tau_min, c * H_k^true * (freqs[r_k]-freqs[l_k]) / freq_ref)
+
+    H_k^true only ever appears on the loss side, never inside
+    model.infer() — using it to calibrate tau is not a train/inference
+    leak, the same category of "read the label" already done by the
+    (also label-only) window detection itself
+    (utils.spectral_partitioning.find_peak_windows).
+
+    Known asymmetry: H_k^true is a HARD max (no gradient needed on the
+    label side) while H_k^pred is a SOFT, temperature-weighted estimate of
+    the same kind of values — and a soft estimate is generically <= the
+    hard max of the values it's drawn from. Consequently this loss's
+    minimum is not exactly at y_pred == y_true: even a PERFECT prediction
+    leaves a small positive residual (shrinking as tau_k shrinks) — see
+    tests/test_loss.py::TestSoftPeakHeightLoss::
+    test_perfect_prediction_residual_is_small_but_nonzero. This is an
+    intentional trade-off, not a bug (the alternative — softening the
+    label side too, so both sides use an identical formula — would remove
+    the residual but reintroduces a design question the source discussion
+    explicitly avoided: the label doesn't need gradient, so there's no
+    reason to pay for softening it). In practice the residual stays small
+    relative to a real collapse-type error (same test file,
+    test_local_collapse_scores_worse_than_shift_unlike_wasserstein) — but
+    if this is ever wired into training, log it as its own component
+    (mirroring DirectionalLoss's `components` return) so a training run
+    isn't misread as having a nonzero floor it can never cross.
+
+    Windows (left_idx/right_idx per peak) are NOT computed here. Peak
+    detection (utils.spectral_partitioning.find_significant_peaks /
+    find_peak_windows) is scipy-based, single-spectrum, non-differentiable
+    Python looping — nn/evaluate.py:53-60 documents why this project
+    already treats it as opt-in/evaluation-only rather than something run
+    every training step. This class expects left_idx/right_idx/peak_mask
+    already computed (once per sample — mirroring how freq_means/
+    shape_means are computed once in
+    nn/optimization.py::_prepare_dataloaders and threaded through
+    training rather than recomputed per batch — via find_peak_windows,
+    padded to a fixed max_peaks and batched into tensors) and never
+    derives them internally.
+    """
+
+    def __init__(self, c=0.15, tau_min=1e-4, freq_ref=None):
+        """
+        Parameters
+        ----------
+        c : float, default 0.15
+            Fraction of a peak's own true height used as its softmax
+            temperature scale, before the width modulation — a starting
+            hyperparameter, not yet tuned; adjust by validation once this
+            is wired into training (see the class docstring's tau_k
+            derivation).
+        tau_min : float, default 1e-4
+            Absolute numerical floor on tau_k (same spirit as
+            utils.log_transform.LOG_FLOOR_FRACTION's floor), preventing a
+            near-zero-energy or degenerate-width peak from collapsing tau
+            toward zero, which would push the softmax back toward the
+            zero-gradient hard max it exists to avoid.
+        freq_ref : float | None, default None
+            Reference bandwidth [Hz] each peak's window width is divided
+            by to get a dimensionless width ratio. None (default) uses the
+            full grid span (freqs[-1]-freqs[0]) at forward() call time —
+            the natural zero-config choice, since a peak's window can
+            never be wider than the whole spectrum.
+        """
+        super().__init__()
+        self.c = c
+        self.tau_min = tau_min
+        self.freq_ref = freq_ref
+
+    def forward(self, y_pred, y_true, freqs, left_idx, right_idx, peak_mask,
+                reduction='mean'):
+        """
+        Parameters
+        ----------
+        y_pred, y_true : torch.Tensor, shape (..., num_freqs)
+            LOG-space (see utils.to_log_space), same convention as
+            SpectralWassersteinLoss/SpectralKLDivergenceLoss — exponentiated
+            internally to get physical E(f), since a peak "height" is only
+            meaningful in physical (not log) space.
+        freqs : torch.Tensor, shape (num_freqs,)
+        left_idx, right_idx : torch.LongTensor, shape (..., max_peaks)
+            INCLUSIVE bin-index bounds of each peak's trough-to-trough
+            window (utils.spectral_partitioning.find_peak_windows),
+            broadcastable against y_pred/y_true's leading (batch,
+            lead_time, ...) dims plus a trailing max_peaks axis. Padding
+            slots (samples with fewer than max_peaks real peaks) may use
+            any placeholder, in-range or not (e.g. 0, 0 or -1, -1) — both
+            indices are clamped into range internally, and right_idx is
+            floored at left_idx, so every window covers at least one bin
+            and no downstream softmax row is ever entirely masked out.
+        peak_mask : torch.BoolTensor, shape (..., max_peaks)
+            True at slots holding a real detected peak; False at padding
+            slots, excluded from the aggregation below (not zero-filled —
+            see the K=0 handling under 'mean').
+        reduction : 'mean' | 'none' | 'per_peak'
+            'mean' (default): scalar — for each sample, the mean squared
+            height error over that sample's real peaks (K=0 samples, i.e.
+            peak_mask all False, are EXCLUDED rather than contributing a
+            filled-in zero — mirrors nn/evaluate.py's M0_MASK_THRESHOLD/
+            valid.any() pattern for a quantity undefined for that sample,
+            rather than diluting the mean toward "no error" for a sample
+            this loss has nothing to say about); NaN only if literally no
+            sample in the batch has any peak.
+            'none': shape (...,) — the per-sample mean-over-real-peaks
+            value (same masking as 'mean', before the final batch mean) —
+            mirrors the sibling losses' 'none', for a future masked-
+            averaging caller (e.g. an nn/evaluate.py block).
+            'per_peak': shape (..., max_peaks) — the raw (unmasked)
+            per-peak squared height error, before aggregating over peaks —
+            mirrors SpectralWassersteinLoss's 'per_bin': the breakdown
+            BEFORE the final reduction: caller applies peak_mask itself.
+
+        Returns
+        -------
+        torch.Tensor — scalar if reduction=='mean'; shape (...,) if
+        'none'; shape (..., max_peaks) if 'per_peak'.
+        """
+        freqs = freqs.to(device=y_pred.device, dtype=y_pred.dtype)
+        num_freqs = y_pred.shape[-1]
+
+        # Defensive clamp: guarantees left_idx <= right_idx and both in
+        # range, so every (..., peak) window covers at least one bin — no
+        # downstream op ever sees an all-masked-out softmax row, whatever
+        # placeholder padding slots use upstream (see left_idx/right_idx
+        # docstring above).
+        left_idx = left_idx.clamp(0, num_freqs - 1)
+        right_idx = right_idx.clamp(0, num_freqs - 1)
+        right_idx = torch.maximum(right_idx, left_idx)
+
+        bin_pos = torch.arange(num_freqs, device=y_pred.device)
+        in_window = (bin_pos >= left_idx.unsqueeze(-1)) & (bin_pos <= right_idx.unsqueeze(-1))
+        # (..., max_peaks, num_freqs)
+
+        E_pred = torch.exp(y_pred).unsqueeze(-2).expand_as(in_window)  # (..., max_peaks, num_freqs)
+        E_true = torch.exp(y_true).unsqueeze(-2).expand_as(in_window)
+
+        # finfo.min rather than literal -inf: softmax subtracts the row
+        # max before exponentiating, so masked entries still underflow
+        # cleanly to a weight of exactly 0.0 — but a literal -inf risks a
+        # 0 * inf -> NaN downstream (e.g. via peak_mask) that finfo.min,
+        # being finite, cannot produce.
+        neg_inf = torch.finfo(y_pred.dtype).min
+        H_true = torch.where(in_window, E_true, neg_inf).amax(dim=-1)  # (..., max_peaks)
+        # Label side: hard max, no gradient needed (see class docstring).
+
+        delta_f_k = freqs[right_idx] - freqs[left_idx]  # (..., max_peaks), Hz
+        freq_ref = self.freq_ref if self.freq_ref is not None else (freqs[-1] - freqs[0])
+        tau_k = (self.c * H_true * (delta_f_k / freq_ref)).clamp(min=self.tau_min)
+
+        logits = torch.where(in_window, E_pred / tau_k.unsqueeze(-1), neg_inf)
+        weights = torch.softmax(logits, dim=-1)
+        H_pred = (E_pred * weights).sum(dim=-1)  # (..., max_peaks)
+
+        per_peak_sq_err = (H_pred - H_true) ** 2
+
+        if reduction == 'per_peak':
+            return per_peak_sq_err
+
+        peak_mask_f = peak_mask.to(per_peak_sq_err.dtype)
+        n_peaks = peak_mask_f.sum(dim=-1)  # (...,)
+        per_sample = (per_peak_sq_err * peak_mask_f).sum(dim=-1) / n_peaks.clamp(min=1)
+        has_peak = n_peaks > 0
+
+        if reduction == 'none':
+            return per_sample
+        elif reduction == 'mean':
+            if not bool(has_peak.any()):
+                return per_sample.new_tensor(float('nan'))
+            return per_sample[has_peak].mean()
+        else:
+            raise ValueError(f"Unknown reduction {reduction!r}. Valid: 'mean', 'none', 'per_peak'")

@@ -9,6 +9,6 @@ from .get_freqs import get_freqs
 from .get_device import get_device, empty_cache
 from .data_processing import data_processing, process_wind
 from .save_progress import save_progress
-from .loss import RMSELoss, DirectionalLoss, SpectralWassersteinLoss, SpectralKLDivergenceLoss
-from .spectral_partitioning import classify_partition, classify_partitions, find_significant_peaks
+from .loss import RMSELoss, DirectionalLoss, SpectralWassersteinLoss, SpectralKLDivergenceLoss, SoftPeakHeightLoss
+from .spectral_partitioning import classify_partition, classify_partitions, find_significant_peaks, find_peak_windows
 from .spectral_peaks import find_spectral_peaks, peak_modality_metrics

@@ -207,6 +207,85 @@ def _trough(spectrum: np.ndarray, left_idx: int, right_idx: int) -> int:
     segment = spectrum[left_idx:right_idx + 1]
     return left_idx + int(np.argmin(segment))
 
+
+def find_peak_windows(
+    freqs: np.ndarray,
+    spectrum: np.ndarray,
+    f_max: float = 0.4,
+    energy_frac: float = 0.05,
+    min_bins: int = 2,
+) -> list[tuple[int, int, int]]:
+    """
+    Like find_significant_peaks, but also returns each surviving peak's
+    trough-to-trough partition window (left_idx, right_idx) — boundary
+    information find_significant_peaks already computes internally (the
+    'lo'/'hi' locals inside its partition_energy closure, used only to
+    gate criterion 2) but never returns.
+
+    Motivation: a differentiable "soft peak height" training loss
+    (utils.loss.SoftPeakHeightLoss) needs a per-peak window to run a
+    softmax over, and the window should be the physically-motivated
+    trough-to-trough partition span — narrow for a narrow swell partition,
+    wide for a broad wind-sea partition — rather than an arbitrary fixed
+    bin-radius around the peak, which would be too wide for one regime or
+    too narrow for the other. Reusing the partition boundaries this module
+    already computes (rather than re-deriving a different notion of
+    "window") also guarantees two adjacent peaks' windows are contiguous,
+    never overlapping: both share the trough between them as their common
+    boundary.
+
+    left_idx/right_idx use EXACTLY the same derivation as
+    find_significant_peaks' internal partition_energy (same _trough calls
+    against the full raw-peak sequence, not just the surviving peaks) — so
+    a window returned here is numerically identical to the span
+    find_significant_peaks already used, internally, to decide whether
+    that peak passed criterion 2.
+
+    Not differentiable, not batched — like find_significant_peaks, this
+    calls scipy.signal.find_peaks and loops in Python over a single 1-D
+    spectrum. Call this ONCE per sample at data-preparation time (see
+    nn/optimization.py::_prepare_dataloaders' freq_means/shape_means
+    precedent for precompute-once-per-run tensors), never inside the
+    training hot path — utils.loss.SoftPeakHeightLoss.forward expects
+    left_idx/right_idx already computed, exactly as
+    nn/evaluate.py:53-60 documents peak-detection being opt-in/
+    evaluation-only for the same performance reason.
+
+    Parameters
+    ----------
+    freqs, spectrum, f_max, energy_frac, min_bins : same as
+        find_significant_peaks.
+
+    Returns
+    -------
+    list[tuple[int, int, int]] — (peak_idx, left_idx, right_idx) per
+    surviving peak, in ascending frequency order. left_idx/right_idx are
+    INCLUSIVE bin indices; 0 and len(spectrum)-1 at the spectrum's own
+    edges when the peak is the first/last partition (same edge convention
+    as find_significant_peaks' internal partition_energy).
+    """
+    from scipy.signal import find_peaks
+
+    raw_peaks, _ = find_peaks(spectrum, height=0)
+    if len(raw_peaks) == 0:
+        return []
+
+    significant_idx = find_significant_peaks(
+        freqs, spectrum, f_max=f_max, energy_frac=energy_frac, min_bins=min_bins
+    )
+    if not significant_idx:
+        return []
+    sig_set = set(significant_idx)
+
+    windows = []
+    for i, idx in enumerate(raw_peaks):
+        if idx not in sig_set:
+            continue
+        lo = 0 if i == 0 else _trough(spectrum, raw_peaks[i - 1], idx)
+        hi = len(spectrum) - 1 if i == len(raw_peaks) - 1 else _trough(spectrum, idx, raw_peaks[i + 1])
+        windows.append((int(idx), int(lo), int(hi)))
+    return windows
+
 # ── Quick demo ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

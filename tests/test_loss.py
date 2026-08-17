@@ -14,7 +14,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.loss import (DirectionalLoss, SpectralWassersteinLoss,
-                         SpectralKLDivergenceLoss, _trapz_bin_widths, _FULL_CHANNELS)
+                         SpectralKLDivergenceLoss, SoftPeakHeightLoss,
+                         _trapz_bin_widths, _FULL_CHANNELS)
 from tests.test_spectral import FREQS as SPECTRAL_FREQS
 
 
@@ -466,3 +467,252 @@ class TestSpectralKLDivergenceLossVsLogSpaceMSE:
         # even more than a full shift (every elevated neighbouring bin adds
         # its own squared-error term).
         assert mse_broad > mse_shift
+
+
+def _small_grid():
+    """Uniform 6-bin, 1 Hz-step toy grid — the exact shift/collapse worked
+    examples from the loss-design discussion, kept deliberately tiny and
+    hand-verifiable rather than reusing the 64-bin SPECTRAL_FREQS grid."""
+    return torch.tensor([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+
+
+def _to_log(values, floor=1e-3):
+    """A plain (non-log) list of physical values -> LOG-space tensor, zeros
+    floored (mirrors _spike's floor, and utils.log_transform.to_log_space's
+    floor-before-log convention) so torch.log never sees an exact 0.0."""
+    x = np.array(values, dtype=np.float32)
+    x = np.where(x <= 0, floor, x)
+    return torch.log(torch.tensor(x, dtype=torch.float32))
+
+
+class TestSoftPeakHeightLoss:
+    """SoftPeakHeightLoss (utils/loss.py) — the third auxiliary spectral
+    loss term, complementary to SpectralWassersteinLoss: W1 measures how
+    far energy moved; this measures whether a peak's own height survived,
+    independent of position. Uses the exact shift/collapse pair worked out
+    by hand in the loss-design discussion (see class docstring), on the
+    tiny 6-bin _small_grid() rather than SPECTRAL_FREQS, so expected
+    values can be reasoned about directly."""
+
+    def test_shift_gives_identical_residual_to_perfect_prediction(self):
+        """A pure position shift doesn't change the MULTISET of values in
+        the window, only which bin holds which value — and H_pred depends
+        only on that multiset (a softmax-weighted average is invariant to
+        a permutation of which index holds which value). So a shifted
+        peak must score EXACTLY as well as a perfect (unshifted)
+        prediction: both compare the identical soft H_pred value against
+        the same hard H_true. This is the precise sense in which this loss
+        is 'invariant to pure shift' — an identity, not an approximation."""
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred_shift = _to_log([0, 0, 0.2, 0.6, 0.2, 0])  # same values, shifted by 1 bin
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([True])
+
+        perfect = loss_fn(true, true, freqs, left_idx, right_idx, peak_mask).item()
+        shift = loss_fn(pred_shift, true, freqs, left_idx, right_idx, peak_mask).item()
+        # rel=1e-4, not tighter: float32 softmax/exp isn't bit-identical
+        # under a mere reordering of the same summands, only equal to
+        # float32 precision — the identity itself is exact in real
+        # arithmetic (see docstring above).
+        assert shift == pytest.approx(perfect, rel=1e-4)
+
+    def test_perfect_prediction_residual_is_small_but_nonzero(self):
+        """H_true is a hard max but H_pred is a soft (temperature-weighted)
+        estimate of the SAME values — a soft estimate is generically <=
+        the hard max of those values, so even a perfect prediction leaves
+        a small positive residual (shrinking as tau_k shrinks). This is an
+        intentional trade-off (the label side doesn't need gradient, so
+        there's no reason to soften it — see class docstring), not a bug:
+        the residual must stay small, not literally zero."""
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([True])
+
+        perfect = loss_fn(true, true, freqs, left_idx, right_idx, peak_mask).item()
+        assert 0.0 < perfect < 0.01
+
+    def test_local_collapse_scores_worse_than_shift_unlike_wasserstein(self):
+        """The complementary-blind-spots property motivating this class:
+        for the SAME pair of predictions, SpectralWassersteinLoss rates a
+        local peak collapse as CHEAPER than a pure shift (it only measures
+        how far mass travelled — collapsing to immediate neighbours moves
+        less mass, less far, than translating the whole peak) — while
+        SoftPeakHeightLoss rates the collapse as clearly WORSE than the
+        shift (it destroys the peak's own height, which a pure shift never
+        touches — see test_shift_gives_identical_residual_to_perfect_
+        prediction)."""
+        peak_loss_fn = SoftPeakHeightLoss()
+        w1_loss_fn = SpectralWassersteinLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred_shift = _to_log([0, 0, 0.2, 0.6, 0.2, 0])
+        pred_collapse = _to_log([0, 0.4, 0.2, 0.4, 0, 0])
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([True])
+
+        peak_shift = peak_loss_fn(pred_shift, true, freqs, left_idx, right_idx, peak_mask).item()
+        peak_collapse = peak_loss_fn(pred_collapse, true, freqs, left_idx, right_idx, peak_mask).item()
+        w1_shift = w1_loss_fn(pred_shift, true, freqs).item()
+        w1_collapse = w1_loss_fn(pred_collapse, true, freqs).item()
+
+        assert w1_collapse < w1_shift            # Wasserstein's blind spot
+        assert peak_collapse > 10 * peak_shift   # SoftPeakHeightLoss's correction
+
+    def test_tau_limits_hard_max_and_mean(self):
+        """tau -> 0 (forced via tiny c/tau_min) must recover H_pred ==
+        max(E_pred window); tau -> infinity (forced via huge tau_min) must
+        recover H_pred == mean(E_pred window) — the two degenerate cases
+        softmax interpolates between (class docstring)."""
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred = _to_log([0, 0.4, 0.2, 0.4, 0, 0])
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([True])
+
+        pred_phys = torch.exp(pred)
+        true_max = torch.exp(true).max().item()
+
+        sharp_fn = SoftPeakHeightLoss(c=1e-8, tau_min=1e-8)
+        sharp = sharp_fn(pred, true, freqs, left_idx, right_idx, peak_mask,
+                          reduction='per_peak').item()
+        expected_sharp = (pred_phys.max().item() - true_max) ** 2
+        assert sharp == pytest.approx(expected_sharp, rel=1e-3)
+
+        soft_fn = SoftPeakHeightLoss(c=1.0, tau_min=1e6)
+        soft = soft_fn(pred, true, freqs, left_idx, right_idx, peak_mask,
+                        reduction='per_peak').item()
+        expected_soft = (pred_phys.mean().item() - true_max) ** 2
+        assert soft == pytest.approx(expected_soft, rel=1e-3)
+
+        assert sharp != pytest.approx(soft, rel=0.1)
+
+    def test_gradient_flows_to_every_bin_in_window_none_outside(self):
+        """The core value proposition over max(): every bin actually
+        inside the peak's window must receive nonzero gradient (unlike
+        argmax, which zeroes out every bin except the single winner),
+        while bins OUTSIDE the window (not part of this peak's partition)
+        must receive exactly zero gradient."""
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred = _to_log([0, 0.4, 0.2, 0.4, 0, 0]).clone().requires_grad_(True)
+        left_idx = torch.tensor([1])   # window covers only bins 1..4
+        right_idx = torch.tensor([4])
+        peak_mask = torch.tensor([True])
+
+        loss_fn = SoftPeakHeightLoss()
+        loss = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask)
+        loss.backward()
+
+        assert pred.grad is not None
+        for i in range(1, 5):
+            assert pred.grad[i].item() != 0.0
+        for i in (0, 5):
+            assert pred.grad[i].item() == 0.0
+
+    def test_reduction_per_peak_and_none_consistent_with_mean(self):
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred = _to_log([0, 0.4, 0.2, 0.4, 0, 0])
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([True])
+
+        per_peak = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask, reduction='per_peak')
+        none_val = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask, reduction='none')
+        mean_val = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask, reduction='mean')
+
+        assert per_peak.shape == (1,)
+        assert none_val.item() == pytest.approx(per_peak[0].item(), rel=1e-6)
+        assert mean_val.item() == pytest.approx(none_val.item(), rel=1e-6)
+
+    def test_k_zero_sample_excluded_from_mean_not_zero_filled(self):
+        """A sample with no detected peak at all (peak_mask all False)
+        must be EXCLUDED from 'mean', not folded in as a filled-in zero —
+        mirrors nn/evaluate.py's M0_MASK_THRESHOLD/valid.any() pattern for
+        a quantity undefined for that sample, rather than diluting the
+        batch mean toward 'no error' for a sample this loss has nothing to
+        say about."""
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred_collapse = _to_log([0, 0.4, 0.2, 0.4, 0, 0])
+
+        true_b = true.unsqueeze(0).expand(2, -1)
+        pred_b = pred_collapse.unsqueeze(0).expand(2, -1)
+        left_idx = torch.tensor([[0, 0], [0, 0]])
+        right_idx = torch.tensor([[5, 5], [5, 5]])
+        peak_mask = torch.tensor([[True, False], [False, False]])  # sample 1: K=0
+
+        per_sample = loss_fn(pred_b, true_b, freqs, left_idx, right_idx, peak_mask, reduction='none')
+        scalar = loss_fn(pred_b, true_b, freqs, left_idx, right_idx, peak_mask, reduction='mean')
+
+        assert per_sample.shape == (2,)
+        assert per_sample[1].item() == pytest.approx(0.0, abs=1e-8)  # K=0 -> safe-divide 0
+        assert scalar.item() == pytest.approx(per_sample[0].item(), rel=1e-5)
+        assert scalar.item() != pytest.approx(per_sample.mean().item(), rel=1e-3)
+
+    def test_all_samples_k_zero_gives_nan(self):
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([False])  # no real peak anywhere in the batch
+
+        scalar = loss_fn(true, true, freqs, left_idx, right_idx, peak_mask)
+        assert torch.isnan(scalar)
+
+    def test_out_of_range_padding_indices_do_not_crash(self):
+        """Padding slots using an out-of-range sentinel (e.g. -1, a common
+        convention) must not produce NaN/inf — the defensive clamp in
+        forward() must catch this regardless of what convention an
+        eventual caller uses."""
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        pred = _to_log([0, 0.4, 0.2, 0.4, 0, 0])
+        left_idx = torch.tensor([0, -1])
+        right_idx = torch.tensor([5, -1])
+        peak_mask = torch.tensor([True, False])
+
+        scalar = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask)
+        per_peak = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask, reduction='per_peak')
+        assert torch.isfinite(scalar)
+        assert torch.isfinite(per_peak).all()
+
+    def test_batched_multistep_shape(self):
+        """(batch, lead_time, num_freqs) with (batch, lead_time, max_peaks)
+        windows — the shape train_one_epoch's y_pred/y_batch actually
+        have — must work, not just a bare 1-D spectrum."""
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true_1d = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        batch, lead_time, max_peaks = 3, 4, 1
+        true = true_1d.expand(batch, lead_time, -1)
+        pred = true.clone()
+        left_idx = torch.zeros(batch, lead_time, max_peaks, dtype=torch.long)
+        right_idx = torch.full((batch, lead_time, max_peaks), 5, dtype=torch.long)
+        peak_mask = torch.ones(batch, lead_time, max_peaks, dtype=torch.bool)
+
+        loss = loss_fn(pred, true, freqs, left_idx, right_idx, peak_mask)
+        assert loss.dim() == 0
+        assert torch.isfinite(loss)
+
+    def test_reduction_invalid_raises(self):
+        loss_fn = SoftPeakHeightLoss()
+        freqs = _small_grid()
+        true = _to_log([0, 0.2, 0.6, 0.2, 0, 0])
+        left_idx = torch.tensor([0])
+        right_idx = torch.tensor([5])
+        peak_mask = torch.tensor([True])
+        with pytest.raises(ValueError, match="reduction"):
+            loss_fn(true, true, freqs, left_idx, right_idx, peak_mask, reduction='sum')
