@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from utils.loss import (DirectionalLoss, SpectralWassersteinLoss,
                          SpectralKLDivergenceLoss, SoftPeakHeightLoss,
-                         _trapz_bin_widths, _FULL_CHANNELS)
+                         _trapz_bin_widths, _FULL_CHANNELS, _cumulative_trapz)
 from tests.test_spectral import FREQS as SPECTRAL_FREQS
 
 
@@ -153,9 +153,15 @@ def _spike(freqs_len, center_idx, height=10.0, floor=1e-3):
 class TestSpectralWassersteinLoss:
     """SpectralWassersteinLoss (nn/training_loop.py's Wasserstein-distance
     auxiliary term / nn/evaluate.py's always-on 'Shape_Wasserstein' metric)
-    — the properties below are what distinguish it from a pointwise loss
-    like RMSELoss: forgiving of small position shifts, mass-scale invariant
-    (it compares shape, not magnitude)."""
+    — as of 2026-08-17 this is Wasserstein-2 (quadratic transport cost),
+    computed via quantile-function inversion, not the earlier Wasserstein-1
+    CDF-L1 shortcut (see the class docstring for why W1's shortcut has no
+    p=2 analogue). The properties below are what distinguish it from a
+    pointwise loss like RMSELoss: forgiving of small position shifts,
+    mass-scale invariant (it compares shape, not magnitude) — both
+    properties W1 also had; W2 additionally penalizes one large
+    displacement more harshly than several small ones summing to the same
+    distance (quadratic vs. linear transport cost)."""
 
     def test_zero_for_identical_spectra(self):
         loss_fn = SpectralWassersteinLoss()
@@ -179,12 +185,12 @@ class TestSpectralWassersteinLoss:
         assert loss_scaled == pytest.approx(loss_unscaled, rel=1e-4)
 
     def test_forgiving_of_small_shifts_unlike_pointwise_error(self):
-        """A narrow peak shifted by a small vs. large number of bins: W1
+        """A narrow peak shifted by a small vs. large number of bins: W2
         must scale smoothly/monotonically with shift distance, while a
         plain pointwise error on the same pairs is roughly CONSTANT (a
         narrow peak has near-total non-overlap even for a 1-bin shift, so
         pointwise error can't distinguish a near miss from a far one) —
-        this is the exact property motivating W1 over RMSELoss/the
+        this is the exact property motivating Wasserstein over RMSELoss/the
         (reverted) SpectralSlopeLoss for the multimodal-blur problem."""
         loss_fn = SpectralWassersteinLoss()
         freqs = torch.tensor(SPECTRAL_FREQS)
@@ -196,15 +202,59 @@ class TestSpectralWassersteinLoss:
             true_n = torch.exp(true) / torch.exp(true).sum()
             return ((pred_n - true_n) ** 2).mean().item()
 
-        w1_near = loss_fn(_spike(n, 21), true, freqs).item()   # shift by 1 bin
-        w1_mid = loss_fn(_spike(n, 25), true, freqs).item()    # shift by 5 bins
-        w1_far = loss_fn(_spike(n, 45), true, freqs).item()    # shift by 25 bins
+        w2_near = loss_fn(_spike(n, 21), true, freqs).item()   # shift by 1 bin
+        w2_mid = loss_fn(_spike(n, 25), true, freqs).item()    # shift by 5 bins
+        w2_far = loss_fn(_spike(n, 45), true, freqs).item()    # shift by 25 bins
 
-        assert w1_near < w1_mid < w1_far  # W1 scales with distance
+        assert w2_near < w2_mid < w2_far  # W2 scales with distance
 
         mse_near = pointwise_mse(_spike(n, 21))
         mse_far = pointwise_mse(_spike(n, 45))
         assert mse_near == pytest.approx(mse_far, rel=0.05)  # pointwise error is blind to distance
+
+    def test_matches_brute_force_quantile_reference(self):
+        """Cross-check against an independent NumPy reference: exponentiate,
+        mass-normalize, build CDFs via manual cumulative trapz, invert both
+        via np.interp on a FINE (5000-point) uniform quantile grid, then
+        W2 = sqrt(trapz((quantile_pred-quantile_true)^2, q_grid)). This is
+        the same quantile-matching formula forward() uses, computed
+        independently and at much higher quadrature resolution — confirms
+        the true-anchored 64-point quadrature forward() actually uses
+        (see class docstring: true's own CDF values double as the
+        quadrature nodes) converges to the same answer as a dedicated fine
+        grid, not just that the code runs.
+
+        Uses a genuinely multi-peaked, unevenly-shaped pair (not pure
+        point-mass spikes) so the transport plan being integrated isn't a
+        degenerate single-displacement case.
+        """
+        loss_fn = SpectralWassersteinLoss()
+        freqs_np = np.asarray(SPECTRAL_FREQS, dtype=np.float64)
+        freqs_t = torch.tensor(SPECTRAL_FREQS)
+        n = len(SPECTRAL_FREQS)
+
+        true_shape = np.abs(np.sin(np.linspace(0.0, 6.0, n))) + 0.05
+        pred_shape = np.abs(np.sin(np.linspace(0.3, 6.3, n))) + 0.08
+        true_log = torch.log(torch.tensor(true_shape, dtype=torch.float32))
+        pred_log = torch.log(torch.tensor(pred_shape, dtype=torch.float32))
+
+        w2_impl = loss_fn(pred_log, true_log, freqs_t).item()
+
+        def _cum_trapz_np(y, x):
+            seg = (y[1:] + y[:-1]) / 2 * (x[1:] - x[:-1])
+            return np.concatenate([[0.0], np.cumsum(seg)])
+
+        true_norm = true_shape / np.trapezoid(true_shape, freqs_np)
+        pred_norm = pred_shape / np.trapezoid(pred_shape, freqs_np)
+        cdf_true = _cum_trapz_np(true_norm, freqs_np)
+        cdf_pred = _cum_trapz_np(pred_norm, freqs_np)
+
+        q_grid = np.linspace(1e-6, 1 - 1e-6, 5000)
+        quant_true = np.interp(q_grid, cdf_true, freqs_np)
+        quant_pred = np.interp(q_grid, cdf_pred, freqs_np)
+        w2_ref = float(np.sqrt(np.trapezoid((quant_pred - quant_true) ** 2, q_grid)))
+
+        assert w2_impl == pytest.approx(w2_ref, rel=0.02)
 
     def test_respects_nonuniform_grid(self):
         """A uniform (constant-height) true and pred spectrum on a
@@ -267,6 +317,30 @@ class TestSpectralWassersteinLoss:
         true = _spike(len(SPECTRAL_FREQS), 20)
         with pytest.raises(ValueError, match="reduction"):
             loss_fn(true, true, freqs, reduction='sum')
+
+    def test_reduction_per_bin_integrates_to_none(self):
+        """per_bin's squared-quantile-gap summand, trapz-integrated over
+        cdf_true (NOT freqs — see class docstring: per_bin's domain is
+        cumulative probability, not frequency) and then sqrt'd, must
+        reproduce the 'none' reduction's per-sample W2 exactly — not a
+        different computation path."""
+        loss_fn = SpectralWassersteinLoss()
+        freqs = torch.tensor(SPECTRAL_FREQS)
+        n = len(SPECTRAL_FREQS)
+        true = torch.stack([_spike(n, 15), _spike(n, 30)])
+        pred = torch.stack([_spike(n, 16), _spike(n, 35)])
+
+        per_bin = loss_fn(pred, true, freqs, reduction='per_bin')
+        per_sample = loss_fn(pred, true, freqs, reduction='none')
+
+        assert per_bin.shape == (2, n)
+
+        true_phys = torch.exp(true)
+        true_norm = true_phys / torch.trapezoid(true_phys, freqs, dim=-1).unsqueeze(-1)
+        cdf_true = _cumulative_trapz(true_norm, freqs)
+
+        w2_from_per_bin = torch.sqrt(torch.trapezoid(per_bin, cdf_true, dim=-1).clamp(min=0.0))
+        assert torch.allclose(w2_from_per_bin, per_sample, atol=1e-5)
 
 
 class TestSpectralKLDivergenceLoss:
@@ -487,10 +561,10 @@ def _to_log(values, floor=1e-3):
 
 class TestSoftPeakHeightLoss:
     """SoftPeakHeightLoss (utils/loss.py) — the third auxiliary spectral
-    loss term, complementary to SpectralWassersteinLoss: W1 measures how
-    far energy moved; this measures whether a peak's own height survived,
-    independent of position. Uses the exact shift/collapse pair worked out
-    by hand in the loss-design discussion (see class docstring), on the
+    loss term, complementary to SpectralWassersteinLoss: Wasserstein
+    measures how far energy moved; this measures whether a peak's own
+    height survived, independent of position. Uses the exact shift/collapse
+    pair worked out by hand in the loss-design discussion (see class docstring), on the
     tiny 6-bin _small_grid() rather than SPECTRAL_FREQS, so expected
     values can be reasoned about directly."""
 

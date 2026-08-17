@@ -99,16 +99,27 @@ set_seed(42)
 # being wired into the search space here:
 #   - wasserstein_loss_weight (nn/optimization.py::objective(), new
 #     trial.suggest_float hyperparameter): an auxiliary SpectralWassersteinLoss
-#     term (utils/loss.py) for target=='shape' — the 1-D earth-mover distance
-#     between predicted and true spectra (exact via CDF L1 distance), added
-#     to the existing per-bin loss. Manually swept at weights 50/150 vs a
-#     0-weight control: every metric improved monotonically (Shape_RMSE
-#     2.244->2.083, Shape_SS 0.107->0.171, Peak_Separation_Recall
-#     0.580->0.617 at weight 150) and the improvement was confirmed visually
-#     sharper on known-multimodal test samples, not just numerically better —
-#     see nn/training_loop.py's docstring for why this term exists (a
-#     whole-spectrum frequency-weighted loss gives multimodal peaks no
-#     special treatment on its own; W1 pushes back on "too flat" specifically).
+#     term (utils/loss.py) for target=='shape' — at the time this was
+#     written, the 1-D Wasserstein-1 earth-mover distance between predicted
+#     and true spectra (exact via CDF L1 distance), added to the existing
+#     per-bin loss. Manually swept at weights 50/150 vs a 0-weight control:
+#     every metric improved monotonically (Shape_RMSE 2.244->2.083, Shape_SS
+#     0.107->0.171, Peak_Separation_Recall 0.580->0.617 at weight 150) and
+#     the improvement was confirmed visually sharper on known-multimodal
+#     test samples, not just numerically better — see nn/training_loop.py's
+#     docstring for why this term exists (a whole-spectrum frequency-weighted
+#     loss gives multimodal peaks no special treatment on its own; W1 pushes
+#     back on "too flat" specifically).
+#     NOTE (2026-08-17): SpectralWassersteinLoss was subsequently switched
+#     from W1 to W2 (quadratic transport cost, quantile-domain formula —
+#     see utils/loss.py's docstring) as part of the KL/Wasserstein/peak loss
+#     ablation. The manually-swept weights (50/150) and the 10-400 search
+#     range below were tuned under the OLD W1 metric's scale; W2's values
+#     are not known to share the same numeric scale (W1's ∫|CDF gap|df and
+#     W2's sqrt(∫(quantile gap)^2 dq) are different quantities, not just a
+#     rescaling of each other), so treat any live v12 trial completed before
+#     this date as using a different, incomparable wasserstein_loss_weight
+#     definition than trials completed after it.
 #   - AUX_SET switched from 'none' to 'dmd' (see below): Dynamic Mode
 #     Decomposition features (nn/prepare_dmd.py) computed per-sample from the
 #     encoder's input window of (already-normalized) density spectra — a few

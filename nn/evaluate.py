@@ -203,11 +203,15 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                last-observed-shape persistence baseline, NOT
                                the all-step-pooled top-level 'overall_SS'.
         'Shape_Wasserstein'  : float, equal to 'per_step_Wasserstein[-1]' —
-                               1-D Wasserstein (earth-mover) distance between
-                               predicted and true final-step shape — see
-                               utils.SpectralWassersteinLoss. Exact via
-                               the CDF-L1 closed form (no OT solver/critic
-                               network needed for a 1-D distribution). Each
+                               1-D Wasserstein-2 (quadratic earth-mover)
+                               distance between predicted and true
+                               final-step shape — see
+                               utils.SpectralWassersteinLoss. Computed via
+                               quantile-function inversion (no OT solver/
+                               critic network needed for a 1-D distribution,
+                               but — unlike Wasserstein-1's exact CDF-L1
+                               shortcut — genuinely needs the quantile
+                               domain; see that class's docstring). Each
                                spectrum is normalized by its own mass before
                                comparison, so this isolates shape error from
                                magnitude error (already tracked separately
@@ -230,13 +234,21 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                metric to begin with.
         'Wasserstein_per_bin', 'Wasserstein_per_bin_pers' : list[float],
                                length num_freqs; the FINAL step's Wasserstein
-                               distance broken out per frequency bin (mean
-                               over samples of |CDF_pred(f) - CDF_true(f)|
-                               BEFORE the frequency integration — see
-                               SpectralWassersteinLoss's reduction='per_bin'),
-                               so trapz(this, freqs) ≈ 'Shape_Wasserstein'.
-                               Deliberately NOT the same shape as
-                               'RMSE_per_bin': a peak shifted by one bin
+                               distance broken out per (true spectrum's own)
+                               frequency bin — mean over samples of
+                               (F_pred^{-1}(cdf_true(f)) - f)^2, the SQUARED
+                               quantile-domain gap BEFORE the final
+                               integration-over-cumulative-probability — see
+                               SpectralWassersteinLoss's reduction='per_bin'.
+                               NOT integrable against `freqs` to recover
+                               'Shape_Wasserstein' (per_bin's domain is
+                               cumulative probability, non-uniformly spaced
+                               in frequency — trapz(this, freqs) is not a
+                               meaningful quantity; integrate against the
+                               corresponding cdf_true instead, as
+                               SpectralWassersteinLoss.forward does
+                               internally). Deliberately NOT the same shape
+                               as 'RMSE_per_bin': a peak shifted by one bin
                                shows up here as a bump straddling the true
                                peak, not a spike exactly at it, since this
                                tracks displaced probability MASS rather than
@@ -598,21 +610,21 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             shape_ss = (1.0 - shape_rmse / shape_rmse_pers
                         if shape_rmse_pers > 0 else float('nan'))
 
-            # 1-D Wasserstein (earth-mover) distance, same masked-mean
-            # discipline as Shape_RMSE/SS above (near-zero-mass samples
-            # excluded before averaging) — see utils.SpectralWassersteinLoss.
-            # Reuses the SAME class the 'shape' target uses unchanged: it
-            # already internally exp()s + mass-normalizes, so it isn't
-            # actually shape-specific (see that class's docstring). Uses
-            # y_pred_all[:, -1:, :] (colon-slice, keeping the lead_time axis
-            # at size 1) rather than the 'shape' block's integer-index
-            # convention, so the result's shape matches `valid`'s (batch, 1)
-            # without any reshape.
+            # 1-D Wasserstein-2 (quadratic earth-mover) distance, same
+            # masked-mean discipline as Shape_RMSE/SS above (near-zero-mass
+            # samples excluded before averaging) — see
+            # utils.SpectralWassersteinLoss. Reuses the SAME class the
+            # 'shape' target uses unchanged: it already internally exp()s +
+            # mass-normalizes, so it isn't actually shape-specific (see that
+            # class's docstring). Uses y_pred_all[:, -1:, :] (colon-slice,
+            # keeping the lead_time axis at size 1) rather than the 'shape'
+            # block's integer-index convention, so the result's shape
+            # matches `valid`'s (batch, 1) without any reshape.
             wasserstein_fn = SpectralWassersteinLoss()
-            w1_per_sample = wasserstein_fn(
+            w2_per_sample = wasserstein_fn(
                 y_pred_all[:, -1:, :], y_true_all[:, -1:, :], freqs, reduction='none'
             ).numpy()  # (batch, 1)
-            shape_wasserstein = float(w1_per_sample[valid].mean())
+            shape_wasserstein = float(w2_per_sample[valid].mean())
         else:
             shape_rmse = float('nan')
             shape_ss = float('nan')
@@ -693,10 +705,11 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         _, tm02_true = compute_bulk_params(true_final.numpy(), freqs_np)
         tm02_err = tm02_pred - tm02_true
 
-        # 1-D Wasserstein (earth-mover) distance between predicted and true
-        # shape, via SpectralWassersteinLoss's exact CDF-L1 formula — cheap
-        # pure tensor math (no scipy/Python loop, unlike the peak metrics
-        # below), so always computed, no opt-in flag needed. Takes the
+        # 1-D Wasserstein-2 (quadratic earth-mover) distance between
+        # predicted and true shape, via SpectralWassersteinLoss's
+        # quantile-domain formula — cheap pure tensor math (no scipy/Python
+        # loop, unlike the peak metrics below), so always computed, no
+        # opt-in flag needed. Takes the
         # LOG-shape tensors directly (exponentiates internally) — NOT
         # pred_final/true_final above, which are already physical.
         #
@@ -719,11 +732,15 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
 
         # Per-frequency-bin breakdown of the FINAL step's Wasserstein
         # distance (see reduction='per_bin''s docstring) — mean over the
-        # batch axis of the pointwise CDF gap, so
-        # trapz(Wasserstein_per_bin, freqs) ≈ Shape_Wasserstein. Lets a
-        # peak-shift error be localized along the frequency axis the same
-        # way RMSE_per_bin localizes a pointwise-value error, without
-        # conflating the two failure modes.
+        # batch axis of the squared quantile gap AT each true bin's own
+        # frequency. NOT integrable against `freqs` to recover
+        # Shape_Wasserstein (unlike the pre-2026-08-17 W1 version of this
+        # comment) — per_bin's domain is cumulative probability (cdf_true),
+        # non-uniformly spaced in frequency, so trapz(this, freqs) is not a
+        # meaningful quantity; see SpectralWassersteinLoss's docstring.
+        # Still lets a peak-shift error be localized along the frequency
+        # axis the same way RMSE_per_bin localizes a pointwise-value error,
+        # without conflating the two failure modes.
         wasserstein_per_bin = wasserstein_fn(
             y_pred_all[:, -1, :], y_true_all[:, -1, :], freqs, reduction='per_bin'
         ).mean(dim=0).numpy()

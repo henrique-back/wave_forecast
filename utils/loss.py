@@ -65,27 +65,108 @@ def _cumulative_trapz(y, freqs):
     return torch.cat([zeros, cum], dim=-1)  # (..., num_freqs)
 
 
+def _inverse_cdf(cdf_vals, freqs, q_levels):
+    """
+    Invert a monotonically non-decreasing per-row CDF via linear
+    interpolation, evaluated at arbitrary per-row quantile levels — the
+    piece SpectralWassersteinLoss's W2 needs that W1 didn't (see that
+    class's docstring: W1's ∫|CDF_pred-CDF_true|df domain-integral shortcut
+    has no p=2 analogue; W2 genuinely requires the quantile/inverse-CDF
+    functions).
+
+    Parameters
+    ----------
+    cdf_vals : torch.Tensor, shape (..., num_freqs)
+        cdf_vals[..., 0] == 0, cdf_vals[..., -1] == 1 (by construction —
+        see _cumulative_trapz of a mass-normalized non-negative spectrum),
+        non-decreasing along the last axis (ties allowed: a zero-density
+        stretch of the spectrum produces a flat plateau).
+    freqs : torch.Tensor, shape (num_freqs,)
+    q_levels : torch.Tensor, shape (..., num_q)
+        Quantile levels in [0, 1] to evaluate the inverse CDF at,
+        broadcastable against cdf_vals' leading dims.
+
+    Returns
+    -------
+    torch.Tensor, shape (..., num_q) — freqs interpolated so that
+    cdf_vals(quantile(q)) == q for each q in q_levels (query values outside
+    cdf_vals' actual [min, max] range are clamped to the nearest grid edge,
+    not extrapolated — see the w.clamp below).
+
+    Differentiable w.r.t. cdf_vals (hence w.r.t. whatever produced it, e.g.
+    a model's log-spectral-energy output): torch.searchsorted's bracketing
+    index is a discrete, non-differentiable selection (the same category as
+    max-pooling's argmax), but the interpolation WEIGHT computed from that
+    bracket's two cdf_vals is a plain differentiable expression — the
+    standard construction behind every differentiable quantile/sorting-based
+    loss. freqs are fixed constants (not a function of the model), so no
+    gradient is needed through them.
+    """
+    num_freqs = cdf_vals.shape[-1]
+    idx = torch.searchsorted(cdf_vals, q_levels, right=True).clamp(1, num_freqs - 1)
+
+    cdf_hi = torch.gather(cdf_vals, -1, idx)
+    cdf_lo = torch.gather(cdf_vals, -1, idx - 1)
+    f_hi = freqs[idx]
+    f_lo = freqs[idx - 1]
+
+    denom = (cdf_hi - cdf_lo).clamp(min=1e-12)
+    w = ((q_levels - cdf_lo) / denom).clamp(0.0, 1.0)
+    return f_lo + w * (f_hi - f_lo)
+
+
 class SpectralWassersteinLoss(torch.nn.Module):
     """
-    1-D Wasserstein-1 (earth-mover) distance between predicted and true
-    spectra, treated as probability distributions over frequency — an
-    alternative to RMSELoss/SpectralSlopeLoss aimed at the same multimodal
-    blurring problem, but with a different, complementary property: W1 is
-    naturally forgiving of small position/phase shifts (a peak one bin off
-    costs a small, smoothly-scaling penalty) while still penalizing "flat
-    blur instead of two spikes" (moving mass from a spike to a spread-out
-    blob costs real transport distance, proportional to how far the mass
-    moved) — unlike a pointwise loss (RMSELoss, or SpectralSlopeLoss's
-    derivative variant), which penalizes a slightly shifted sharp peak
-    almost as harshly as a completely displaced one, since a shift produces
-    near-zero pointwise/derivative overlap at the peak location.
+    1-D Wasserstein-2 (quadratic earth-mover) distance between predicted
+    and true spectra, treated as probability distributions over frequency —
+    an alternative to RMSELoss/SpectralSlopeLoss aimed at the same
+    multimodal blurring problem, but with a different, complementary
+    property: W2 is naturally forgiving of small position/phase shifts (a
+    peak one bin off costs a small, smoothly-scaling penalty) while still
+    penalizing "flat blur instead of two spikes" (moving mass from a spike
+    to a spread-out blob costs real transport distance, proportional to how
+    far the mass moved) — unlike a pointwise loss (RMSELoss, or
+    SpectralSlopeLoss's derivative variant), which penalizes a slightly
+    shifted sharp peak almost as harshly as a completely displaced one,
+    since a shift produces near-zero pointwise/derivative overlap at the
+    peak location.
 
-    For 1-D distributions, W1 has an exact closed form: the L1 distance
-    between CDFs (∫|CDF_pred(f) - CDF_true(f)| df) — no optimal-transport
-    solver or learned critic network needed (that machinery, e.g. a WGAN's
-    critic, is only required to APPROXIMATE Wasserstein distance in high
-    dimensions; here the spectrum is a single 1-D curve over an ordered
-    frequency axis, so it's computed exactly and cheaply).
+    W2 rather than W1 (this class's implementation prior to 2026-08-17):
+    W2's SQUARED transport cost penalizes one large displacement of mass
+    more harshly than several small ones moving the same total distance
+    (quadratic vs. linear in distance), which better matches the failure
+    mode motivating this loss in the first place — a peak fully misplaced
+    to a distant frequency should cost disproportionately more than the
+    same peak merely broadening into its immediate neighbourhood — whereas
+    W1's linear cost treats "one peak moved far" and "many small local
+    shifts summing to the same total distance" as interchangeable.
+
+    For 1-D distributions, W1 has a convenient exact shortcut — the L1
+    distance between CDFs, ∫|CDF_pred(f)-CDF_true(f)| df — but this
+    shortcut is SPECIFIC to p=1 and has no p=2 analogue. The general 1-D
+    formula for any p, used here, works in the QUANTILE (inverse-CDF)
+    domain instead of the CDF domain:
+
+        W_p(F, G)^p = ∫_0^1 |F^{-1}(q) - G^{-1}(q)|^p dq
+
+    Since the true spectrum's own CDF trivially inverts (F_true^{-1} at
+    quantile level cdf_true[i] is just freqs[i] — cdf_true was built FROM
+    freqs, so no interpolation error there), only the predicted spectrum's
+    quantile function needs inverting (via _inverse_cdf), evaluated at the
+    true spectrum's own quantile levels — this doubles as the numerical
+    quadrature nodes for the integral above (non-uniform, spaced however
+    cdf_true happens to be spaced), avoiding a separate arbitrary quantile
+    grid and keeping every tensor a fixed (..., num_freqs) shape for batched
+    GPU execution (a grid merging BOTH spectra's breakpoints, the more
+    "symmetric" construction, would have a variable, per-sample breakpoint
+    count and can't be batched this way). This mirrors the true-anchored
+    convention already used elsewhere in this codebase (utils.loss.
+    SoftPeakHeightLoss's tau_k/H_true; utils.spectral_peaks.
+    peak_modality_metrics's true-only partition windows): geometry comes
+    from the true side, the model is evaluated against it, not the reverse.
+    Cost: one torch.searchsorted + torch.gather (batched, O(num_freqs) per
+    row) in addition to W1's plain trapz — still no OT solver/critic
+    network, no per-sample Python loop.
 
     Each spectrum is normalized by its own total mass before building its
     CDF — this compares pure SHAPE, decoupled from magnitude, by design:
@@ -116,24 +197,26 @@ class SpectralWassersteinLoss(torch.nn.Module):
             unchanged for both.
         freqs : torch.Tensor, shape (num_freqs,)
         reduction : 'mean' | 'none' | 'per_bin'
-            'mean' (default): scalar, mean W1 distance over every (batch,
+            'mean' (default): scalar, mean W2 distance over every (batch,
             lead_time, ...) axis — used as-is by the training loss.
             'none': returns the per-(batch, lead_time, ...) tensor before
             averaging — used by nn/evaluate.py's 'density' block, which
             must exclude near-zero-mass samples (M0_MASK_THRESHOLD) before
             averaging, the same masking already applied to Shape_RMSE/SS
             there; that requires per-sample values, not a pre-reduced scalar.
-            'per_bin': returns |CDF_pred(f) - CDF_true(f)| itself, shape
-            (..., num_freqs) — the pointwise CDF gap at each frequency
-            BEFORE the final trapz integration collapses it to a scalar.
-            W1 = trapz(this, freqs), so this is W1's per-bin breakdown: how
-            much transport distance is attributable to each part of the
-            spectrum, rather than how far off the raw value at that bin is
-            (which is what an RMSE-per-bin measures). A peak that's shifted
-            by one bin shows up here as a bump straddling the true peak's
-            location, not a spike exactly at it — useful alongside an
-            RMSE-per-bin plot precisely because RMSE punishes that shift as
-            if the mass had vanished rather than moved.
+            'per_bin': returns (F_pred^{-1}(cdf_true(f)) - f)^2 itself,
+            shape (..., num_freqs) — indexed by the TRUE spectrum's own
+            frequency bins (see class docstring: true's quantile levels
+            double as the quadrature nodes), the SQUARED frequency gap
+            between where the true spectrum's mass sits and where the
+            model's predicted quantile function places that same
+            cumulative-probability level, BEFORE the final trapz-over-
+            cdf_true-then-sqrt collapses it to a scalar. W2 =
+            sqrt(trapz(this, cdf_true)), so this is W2's per-true-bin
+            breakdown — NOT integrable against `freqs` (unlike W1's old
+            per_bin, whose domain WAS freqs; this one's domain is
+            cumulative probability, cdf_true, which is non-uniformly
+            spaced in frequency).
 
         Returns
         -------
@@ -152,16 +235,21 @@ class SpectralWassersteinLoss(torch.nn.Module):
 
         cdf_pred = _cumulative_trapz(pred_norm, freqs)
         cdf_true = _cumulative_trapz(true_norm, freqs)
-        cdf_gap = torch.abs(cdf_pred - cdf_true)
+
+        # F_true^{-1}(cdf_true) == freqs exactly, so only pred's quantile
+        # function needs inverting — see class docstring.
+        pred_quantile_at_true_levels = _inverse_cdf(cdf_pred, freqs, cdf_true)
+        sq_gap = (pred_quantile_at_true_levels - freqs) ** 2  # freqs broadcasts
 
         if reduction == 'per_bin':
-            return cdf_gap
+            return sq_gap
 
-        w1 = torch.trapezoid(cdf_gap, freqs, dim=-1)
+        w2_sq = torch.trapezoid(sq_gap, cdf_true, dim=-1)
+        w2 = torch.sqrt(w2_sq.clamp(min=0.0))
         if reduction == 'mean':
-            return w1.mean()
+            return w2.mean()
         elif reduction == 'none':
-            return w1
+            return w2
         else:
             raise ValueError(f"Unknown reduction {reduction!r}. Valid: 'mean', 'none', 'per_bin'")
 

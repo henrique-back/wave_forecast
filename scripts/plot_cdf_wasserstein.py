@@ -14,10 +14,17 @@ a typical case rather than a cherry-picked best/worst one.
 
 For each of the two samples, plots the PDF (E(f) or shape(f), depending on
 --target) on top and the CDF on the bottom, with the area between the true
-and predicted CDFs shaded — that shaded area IS the Wasserstein-1 distance
-(W1 = integral of |CDF_pred - CDF_true| df, see SpectralWassersteinLoss's
-docstring), so the plot makes the metric's "transport cost" reading visually
-literal rather than just a number in a table.
+and predicted CDFs shaded. As of the 2026-08-17 W1->W2 update
+(SpectralWassersteinLoss now computes Wasserstein-2, see its docstring),
+that shaded area is no longer literally equal to the metric actually
+trained/reported elsewhere in this project — W1's ∫|CDF_pred-CDF_true|df
+has an exact shaded-area picture, but W2's quantile-domain formula doesn't.
+This plot keeps the CDF shading (still a correct, intuitive picture of W1
+specifically, and a reasonable proxy for "how much distributional mismatch
+there is") but labels it honestly as W1, and separately reports the actual
+W2 value (used elsewhere for training/evaluation, and for picking which
+sample is "representative" below) alongside it — see plot_sample's
+docstring.
 
 Usage:
     python scripts/plot_cdf_wasserstein.py --experiment shape_v12 --lead 12
@@ -96,21 +103,28 @@ def compute_cdf(spectrum_1d, freqs_np):
     return cdf / max(mass, 1e-8)
 
 
-def pick_representative(mask, w1_all, override_index):
+def pick_representative(mask, w2_all, override_index):
     if override_index is not None:
         return override_index
     idx_pool = np.flatnonzero(mask)
     if idx_pool.size == 0:
         return None
-    order = np.argsort(w1_all[idx_pool])
+    order = np.argsort(w2_all[idx_pool])
     median_pos = idx_pool[order[len(order) // 2]]
     return int(median_pos)
 
 
-def plot_sample(ax_pdf, ax_cdf, freqs_np, true_s, pred_s, pers_s, n_peaks, w1_pred, w1_pers, ylabel):
+def plot_sample(ax_pdf, ax_cdf, freqs_np, true_s, pred_s, pers_s, n_peaks, w2_pred, w2_pers, ylabel):
+    """w2_pred/w2_pers are the actual SpectralWassersteinLoss (W2) values for
+    this sample — used only for the title text the caller builds, not
+    recomputed here. The shaded CDF area plotted below is a SEPARATE,
+    locally-computed W1 (∫|CDF_pred-CDF_true|df) — see module docstring for
+    why W1, not W2, is what the shaded area can honestly claim to equal."""
     cdf_true = compute_cdf(true_s, freqs_np)
     cdf_pred = compute_cdf(pred_s, freqs_np)
     cdf_pers = compute_cdf(pers_s, freqs_np)
+    w1_pred = float(np.trapezoid(np.abs(cdf_pred - cdf_true), freqs_np))
+    w1_pers = float(np.trapezoid(np.abs(cdf_pers - cdf_true), freqs_np))
 
     ax_pdf.plot(freqs_np, true_s, "k-", label="True")
     ax_pdf.plot(freqs_np, pred_s, "C0-", label="Predicted")
@@ -124,14 +138,14 @@ def plot_sample(ax_pdf, ax_cdf, freqs_np, true_s, pred_s, pers_s, n_peaks, w1_pr
     ax_cdf.plot(freqs_np, cdf_pers, "C1--", label="Persistence")
     ax_cdf.fill_between(
         freqs_np, cdf_true, cdf_pred, color="C0", alpha=0.2,
-        label=f"W1(pred)={w1_pred:.4f}",
+        label=f"W1 area(pred)={w1_pred:.4f}",
     )
     ax_cdf.set_xlabel("Frequency (Hz)")
     ax_cdf.set_ylabel("CDF")
     ax_cdf.legend(fontsize=8)
     ax_cdf.grid(True, alpha=0.3)
 
-    return cdf_true, cdf_pred, cdf_pers
+    return cdf_true, cdf_pred, cdf_pers, w1_pred, w1_pers
 
 
 def main():
@@ -180,9 +194,14 @@ def main():
     pred_np = np.exp(y_pred_step.numpy())
     pers_np = np.exp(y_pers_step.numpy())
 
+    # W2 (Wasserstein-2, as of 2026-08-17 — see SpectralWassersteinLoss's
+    # docstring) — the actual metric trained/reported elsewhere in this
+    # project. Used below to pick each bucket's median-error representative
+    # sample and reported in the plot titles; the CDF shading itself plots
+    # a separately-computed W1 (see plot_sample).
     wasserstein_fn = SpectralWassersteinLoss()
-    w1_pred_all = wasserstein_fn(y_pred_step, y_true_step, freqs, reduction="none").numpy()
-    w1_pers_all = wasserstein_fn(y_pers_step, y_true_step, freqs, reduction="none").numpy()
+    w2_pred_all = wasserstein_fn(y_pred_step, y_true_step, freqs, reduction="none").numpy()
+    w2_pers_all = wasserstein_fn(y_pers_step, y_true_step, freqs, reduction="none").numpy()
 
     peak_counts = np.array(
         [len(find_spectral_peaks(freqs_np, true_np[i], args.f_max, args.energy_frac, args.min_bins))
@@ -195,8 +214,8 @@ def main():
         f"multimodal / {(peak_counts == 0).sum()} no-peak samples out of {len(peak_counts)}"
     )
 
-    uni_idx = pick_representative(unimodal_mask, w1_pred_all, args.unimodal_index)
-    multi_idx = pick_representative(multimodal_mask, w1_pred_all, args.multimodal_index)
+    uni_idx = pick_representative(unimodal_mask, w2_pred_all, args.unimodal_index)
+    multi_idx = pick_representative(multimodal_mask, w2_pred_all, args.multimodal_index)
     if uni_idx is None:
         raise ValueError("No unimodal (1-peak) sample found at this step — try a different --step.")
     if multi_idx is None:
@@ -205,29 +224,30 @@ def main():
     ylabel = "Shape E(f)/m₀" if args.target == "shape" else "E(f) (m²/Hz)"
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex="col")
-    plot_sample(
+    _, _, _, w1_pred_uni, w1_pers_uni = plot_sample(
         axes[0, 0], axes[1, 0], freqs_np,
         true_np[uni_idx], pred_np[uni_idx], pers_np[uni_idx],
-        peak_counts[uni_idx], w1_pred_all[uni_idx], w1_pers_all[uni_idx], ylabel,
+        peak_counts[uni_idx], w2_pred_all[uni_idx], w2_pers_all[uni_idx], ylabel,
     )
     axes[0, 0].set_title(
         f"Unimodal — sample {uni_idx} ({peak_counts[uni_idx]} true peak)\n"
-        f"W1(pred)={w1_pred_all[uni_idx]:.4f}  W1(persistence)={w1_pers_all[uni_idx]:.4f}"
+        f"W2(pred)={w2_pred_all[uni_idx]:.4f}  W2(persistence)={w2_pers_all[uni_idx]:.4f}"
     )
 
-    plot_sample(
+    _, _, _, w1_pred_multi, w1_pers_multi = plot_sample(
         axes[0, 1], axes[1, 1], freqs_np,
         true_np[multi_idx], pred_np[multi_idx], pers_np[multi_idx],
-        peak_counts[multi_idx], w1_pred_all[multi_idx], w1_pers_all[multi_idx], ylabel,
+        peak_counts[multi_idx], w2_pred_all[multi_idx], w2_pers_all[multi_idx], ylabel,
     )
     axes[0, 1].set_title(
         f"Multimodal — sample {multi_idx} ({peak_counts[multi_idx]} true peaks)\n"
-        f"W1(pred)={w1_pred_all[multi_idx]:.4f}  W1(persistence)={w1_pers_all[multi_idx]:.4f}"
+        f"W2(pred)={w2_pred_all[multi_idx]:.4f}  W2(persistence)={w2_pers_all[multi_idx]:.4f}"
     )
 
     fig.suptitle(
         f"{args.experiment} — {args.target} target, lead {args.lead}h, step {step + 1}\n"
-        f"Shaded area between CDFs = Wasserstein-1 distance (earth-mover transport cost)"
+        f"Titles report W2 (the trained/evaluated metric); shaded CDF area = W1 "
+        f"(earth-mover transport cost — the metric with an exact area picture)"
     )
     fig.tight_layout()
 

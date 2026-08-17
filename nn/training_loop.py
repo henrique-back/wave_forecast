@@ -38,16 +38,18 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         target in ('density', 'shape') only. Default 0.0 (no behavior
         change). When > 0, adds wasserstein_loss_weight *
         utils.SpectralWassersteinLoss(y_pred, y_batch, freqs) to the main
-        per-bin loss — the 1-D earth-mover distance between predicted and
-        true spectra (exact via CDF L1 distance, see utils/loss.py).
-        SpectralWassersteinLoss internally exp()s and mass-normalizes its
-        input, so it is not actually shape-specific — the same call works
-        for 'density's log-spectral-energy y_pred/y_batch unchanged. Unlike
-        the main per-bin loss, W1 is forgiving of small peak-position shifts
-        while still penalizing a blurred/flattened prediction relative to a
-        sharp true spectrum — aimed at the same multimodal-blur problem as
-        the (reverted) SpectralSlopeLoss experiment, via a different
-        mechanism.
+        per-bin loss — the 1-D Wasserstein-2 (quadratic earth-mover)
+        distance between predicted and true spectra, computed via
+        quantile-function inversion (see utils/loss.py; W1's exact CDF-L1
+        shortcut has no p=2 analogue, so this needs the more general
+        quantile-domain formula). SpectralWassersteinLoss internally exp()s
+        and mass-normalizes its input, so it is not actually shape-specific
+        — the same call works for 'density's log-spectral-energy
+        y_pred/y_batch unchanged. Unlike the main per-bin loss, Wasserstein
+        is forgiving of small peak-position shifts while still penalizing a
+        blurred/flattened prediction relative to a sharp true spectrum —
+        aimed at the same multimodal-blur problem as the (reverted)
+        SpectralSlopeLoss experiment, via a different mechanism.
     kl_loss_weight : float
         target in ('density', 'shape') only. Default 0.0 (no behavior
         change). When > 0, adds kl_loss_weight *
