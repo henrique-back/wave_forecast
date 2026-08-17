@@ -230,6 +230,15 @@ def main():
                 # .get(..., 0.0) falls back to the pre-v12 no-op behavior for
                 # older best_trial.txt files that predate this hyperparameter.
                 wasserstein_loss_weight=params.get("wasserstein_loss_weight", 0.0),
+                # Not yet in objective()'s search space (see
+                # nn/optimization.py::_train_model's docstring) — best_trial.txt
+                # will never actually contain this key until a Stage 2
+                # promotion, so .get(..., 0.0) is a no-op here today. Kept for
+                # forward-compatibility with the same convention
+                # wasserstein_loss_weight uses, and so a manually-edited
+                # best_trial.txt (or a direct _train_model(...) call bypassing
+                # this script) can already override it for a Stage 1 A/B sweep.
+                kl_loss_weight=params.get("kl_loss_weight", 0.0),
             )
 
             if best_model_state is not None:

@@ -140,7 +140,8 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
 
 def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                   shape_means, target, lead_time, lr, weight_decay, objective_metric,
-                  num_epochs=80, patience=10, trial=None, wasserstein_loss_weight=0.0):
+                  num_epochs=80, patience=10, trial=None, wasserstein_loss_weight=0.0,
+                  kl_loss_weight=0.0):
     """Run the scheduled-sampling training loop with early stopping.
 
     Shared by objective() (Optuna trial) and scripts/train.py (fixed-config
@@ -155,6 +156,16 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         'wasserstein_loss_weight'); scripts/train.py reads the winning
         trial's value back out of best_trial.txt's params rather than
         setting it manually.
+    kl_loss_weight : float, target in ('density', 'shape') only, default
+        0.0 (no behavior change) — forwarded to train_one_epoch's auxiliary
+        SpectralKLDivergenceLoss term (see nn/training_loop.py /
+        utils/loss.py docstrings). Unlike wasserstein_loss_weight, NOT
+        tuned by objective() yet — no manually-swept range exists yet to
+        base a trial.suggest_float bracket on, and the live v12 study
+        shouldn't be disrupted by an unplanned STUDY_VERSION bump. This is
+        a manual-A/B-sweep-only parameter for now (Stage 1); promoting it
+        to the search space (Stage 2) bumps STUDY_VERSION per the existing
+        convention for any new objective() hyperparameter.
 
     Returns (best_val_score, best_val_metrics, best_model_state) — note
     best_val_score is the SMOOTHED score (see VAL_SCORE_SMOOTHING_WINDOW
@@ -224,7 +235,8 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         train_metrics = train_one_epoch(model, train_loader, optimizer, device, freqs,
                                         tf_ratio=tf_ratio, freq_means=freq_means,
                                         shape_means=shape_means,
-                                        wasserstein_loss_weight=wasserstein_loss_weight)
+                                        wasserstein_loss_weight=wasserstein_loss_weight,
+                                        kl_loss_weight=kl_loss_weight)
         val_metrics   = evaluate(model, val_loader, device, freqs,
                                   lead_time=lead_time, freq_means=freq_means,
                                   shape_means=shape_means)

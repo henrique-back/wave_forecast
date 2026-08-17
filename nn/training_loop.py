@@ -1,11 +1,12 @@
-from utils import get_start_token, RMSELoss, trapz_weights, to_log_space, SpectralWassersteinLoss
+from utils import (get_start_token, RMSELoss, trapz_weights, to_log_space,
+                   SpectralWassersteinLoss, SpectralKLDivergenceLoss)
 import torch
 from tqdm import tqdm
 
 
 def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
                     tf_ratio=1.0, freq_means=None, shape_means=None,
-                    wasserstein_loss_weight=0.0):
+                    wasserstein_loss_weight=0.0, kl_loss_weight=0.0):
     """Train for one epoch and return {'RMSE': avg_loss}.
 
     avg_loss is the mean per-sample training loss actually optimised: RMSE
@@ -47,6 +48,26 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         sharp true spectrum — aimed at the same multimodal-blur problem as
         the (reverted) SpectralSlopeLoss experiment, via a different
         mechanism.
+    kl_loss_weight : float
+        target in ('density', 'shape') only. Default 0.0 (no behavior
+        change). When > 0, adds kl_loss_weight *
+        utils.SpectralKLDivergenceLoss(y_pred, y_batch, freqs) to the main
+        per-bin loss — KL divergence between predicted/true spectra treated
+        as Δf-weighted probability distributions over frequency (see
+        utils/loss.py; gradient-equivalent to a plain cross-entropy term,
+        used instead of one purely so this reports exactly 0 at a perfect
+        match). Unlike wasserstein_loss_weight, NOT yet tuned by
+        nn/optimization.py::objective() — no manually-swept range exists
+        yet to base a search bracket on, so this is a manual-A/B-only
+        parameter for now (Stage 1); promoting it to Optuna's search space
+        is a deferred follow-up. Complementary to (not a substitute for)
+        the Wasserstein term: this KL term has no cross-bin spatial
+        awareness (a coherently shifted peak is still fully penalized), but
+        weights the main per-bin loss's floor-crossing errors by how much
+        true probability mass the affected bin actually holds, discounting
+        a peak that broadens into its neighbourhood (while still covering
+        its true bin) relative to the current frequency-weighted
+        log-space MSE, which penalizes that case more than a full shift.
 
     For 'density'/'shape' targets, the loss is additionally weighted across
     the frequency axis by utils.trapz_weights(freqs) — the grid is
@@ -59,6 +80,7 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
     total_loss = 0.0
     loss_fn = RMSELoss()
     wasserstein_loss_fn = SpectralWassersteinLoss()
+    kl_loss_fn = SpectralKLDivergenceLoss()
 
     freq_weights = None
     if model.target in ('density', 'shape') and freqs is not None:
@@ -146,6 +168,9 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
 
         if model.target in ('density', 'shape') and wasserstein_loss_weight > 0:
             loss = loss + wasserstein_loss_weight * wasserstein_loss_fn(y_pred, y_batch, freqs)
+
+        if model.target in ('density', 'shape') and kl_loss_weight > 0:
+            loss = loss + kl_loss_weight * kl_loss_fn(y_pred, y_batch, freqs)
 
         optimizer.zero_grad()
         loss.backward()
