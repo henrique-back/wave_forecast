@@ -252,6 +252,25 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                so this should be ~0; a nonzero value here
                                would indicate infer()'s renormalization isn't
                                being hit (e.g. a stale checkpoint/code path).
+        'Tm02_RMSE', 'Tm02_Bias' : float, RMSE / mean signed error (predicted
+                               − target) of Tm02 = √(m₀/m₂) at the final
+                               step, computed directly on the unit-area shape
+                               spectrum. Tm02 is scale-invariant (scaling
+                               E(f) by any common factor scales m₀ and m₂
+                               identically, leaving their ratio untouched),
+                               so — unlike Hs — it needs no freq_means/
+                               denormalisation to be physically meaningful
+                               here; reuses utils.compute_bulk_params (same
+                               function the 'density' block above uses) and
+                               discards its Hs component, which has no
+                               physical meaning on a shape spectrum
+                               (normalised to unit area, not real energy).
+                               A whole-spectrum average across however many
+                               wind-sea/swell partitions the sample has —
+                               see 'Tm02_RMSE_windsea'/'Tm02_RMSE_swell'
+                               below (compute_peak_metrics=True only) for
+                               the partition-conditioned breakdown that
+                               doesn't blend those two populations together.
 
     Peak-aware multimodal metrics (target == 'shape', compute_peak_metrics=True only)
     -------------------------------------------------------------------------------
@@ -282,11 +301,49 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                gated on the model having its own detected
                                peak there, so a fully blurred secondary
                                peak still counts against this number.
+                               Pooled across BOTH wind-sea and swell
+                               partitions — see the _windsea/_swell
+                               variants below to avoid blending those two
+                               different predictability regimes together.
         'Peak_Separation_Recall': float, fraction of true peaks that have a
                                model-detected peak within a few bins of
                                them — the direct "does the model actually
                                separate the peaks" number; 1.0 only if
                                every true peak has a matching predicted one.
+                               Also pooled across both partition types.
+        'Peak_Height_RelError_windsea', 'Peak_Height_RelError_swell',
+        'Peak_Separation_Recall_windsea', 'Peak_Separation_Recall_swell' :
+                               float, the same two definitions above,
+                               computed separately per partition — each
+                               true partition (Portilla-significant peak +
+                               its trough-to-trough window) is classified
+                               'wind_sea' vs 'swell' via
+                               utils.spectral_partitioning.classify_partition
+                               (Violante-Carvalho γ* = S_obs(fp)/S_PM(fp)
+                               threshold). Wind-sea partitions are broad,
+                               energetic, fast-evolving (a magnitude/energy-
+                               tracking problem); swell partitions are
+                               narrow, slow, persistent (closer to a
+                               position/shift problem, e.g. what a
+                               Wasserstein loss term specifically targets)
+                               — a loss change that only helps one of the
+                               two is invisible in the pooled numbers above.
+        'Peak_windsea_n', 'Peak_swell_n' : int, number of true partitions
+                               pooled into each label's bucket above.
+        'Tm02_RMSE_windsea', 'Tm02_Bias_windsea',
+        'Tm02_RMSE_swell', 'Tm02_Bias_swell' : float, RMSE / mean signed
+                               error of Tm02 = √(m₀/m₂), integrated over
+                               EACH true partition's own window rather than
+                               the whole spectrum (see 'Tm02_RMSE' above) —
+                               a partition whose predicted in-window energy
+                               is below energy_frac of that partition's own
+                               true in-window energy is excluded (Tm02 is
+                               ill-conditioned on near-zero mass; the miss
+                               is already reflected in
+                               Peak_Separation_Recall).
+        'Tm02_windsea_n', 'Tm02_swell_n' : int, number of partitions pooled
+                               into each label's Tm02 bucket (<= the
+                               corresponding Peak_*_n — see above).
         'Shape_unimodal_samples', 'Shape_multimodal_samples' : int, sample
                                counts (true peak count == 1 vs >= 2).
         'Shape_RMSE_unimodal', 'Shape_SS_unimodal',
@@ -623,6 +680,19 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         shape_rmse_pers  = per_step_rmse_pers_phys[-1]
         shape_ss = per_step_ss_phys[-1]
 
+        # --- Tm02 (whole spectrum) ---
+        # Tm02 = sqrt(m0/m2) is scale-invariant: scaling E(f) by any common
+        # factor scales m0 and m2 identically, leaving their ratio (and thus
+        # Tm02) untouched. Unlike Hs, it needs no physical units/freq_means
+        # to be meaningful, so it can be computed directly on the unit-area
+        # SHAPE spectrum — reuses compute_bulk_params (same function the
+        # 'density' target's block above uses) and discards its Hs
+        # component, which has no physical meaning on a shape spectrum
+        # (normalised to unit area, not real energy).
+        _, tm02_pred = compute_bulk_params(pred_final.numpy(), freqs_np)
+        _, tm02_true = compute_bulk_params(true_final.numpy(), freqs_np)
+        tm02_err = tm02_pred - tm02_true
+
         # 1-D Wasserstein (earth-mover) distance between predicted and true
         # shape, via SpectralWassersteinLoss's exact CDF-L1 formula — cheap
         # pure tensor math (no scipy/Python loop, unlike the peak metrics
@@ -705,6 +775,8 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
             'Shape_SS'         : shape_ss,
             'Shape_Wasserstein': shape_wasserstein,
             'Shape_Mass_Error' : float(np.mean(np.abs(mass - 1.0))),
+            'Tm02_RMSE'        : float(np.sqrt(np.mean(tm02_err ** 2))),
+            'Tm02_Bias'        : float(np.mean(tm02_err)),
         }
 
         if compute_peak_metrics:

@@ -20,6 +20,7 @@ from scipy.ndimage import uniform_filter1d
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.test_spectral import _jonswap, FREQS
+from utils.spectral_partitioning import classify_partition, find_peak_windows
 from utils.spectral_peaks import find_spectral_peaks, peak_modality_metrics
 
 
@@ -114,3 +115,73 @@ class TestPeakModalityMetrics:
         assert np.isfinite(metrics['Peak_Height_RelError'])
         assert 0.0 < metrics['Peak_Height_RelError'] < 2.0
         assert metrics['Peak_Separation_Recall'] == pytest.approx(0.5)
+
+
+class TestPeakModalityMetricsPartitioned:
+    """wind_sea/swell-conditioned breakdown (_windsea/_swell suffixes) and
+    the per-partition Tm02 buckets — see utils/loss.py's
+    SpectralKLDivergenceLoss-adjacent motivation in CLAUDE.md: a pooled
+    Peak_Height_RelError/Peak_Separation_Recall/Tm02 blends two physically
+    different predictability regimes (broad, fast-evolving wind-sea
+    partitions vs narrow, persistent swell partitions) together, hiding
+    which one a given loss change actually helped.
+    """
+
+    def test_identical_pred_and_true_zero_error_per_label(self):
+        """pred == true exactly: whichever wind_sea/swell label(s) the true
+        spectrum's two partitions get (derived independently via
+        classify_partition, not assumed), every populated bucket must show
+        perfect height/recall/Tm02 agreement, and the per-label counts must
+        exactly account for both true partitions."""
+        true = _bimodal(FREQS)
+        pred = true.copy()
+
+        windows = find_peak_windows(FREQS, true)
+        assert len(windows) == 2  # precondition for this test to mean anything
+        labels = [classify_partition(fp=FREQS[idx], S_obs_at_fp=true[idx])
+                  for idx, _, _ in windows]
+
+        metrics, mask = peak_modality_metrics(FREQS, pred[np.newaxis, :], true[np.newaxis, :])
+
+        assert mask[0]
+        assert metrics['Peak_windsea_n'] == labels.count('wind_sea')
+        assert metrics['Peak_swell_n'] == labels.count('swell')
+        assert metrics['Peak_windsea_n'] + metrics['Peak_swell_n'] == 2
+        # pred == true exactly, so no partition's in-window energy ratio can
+        # fall below the Tm02 masking threshold — every partition counted
+        # above must also be counted here.
+        assert metrics['Tm02_windsea_n'] == metrics['Peak_windsea_n']
+        assert metrics['Tm02_swell_n'] == metrics['Peak_swell_n']
+
+        for suffix in ('windsea', 'swell'):
+            if metrics[f'Peak_{suffix}_n'] > 0:
+                assert metrics[f'Peak_Height_RelError_{suffix}'] == pytest.approx(0.0, abs=1e-6)
+                assert metrics[f'Peak_Separation_Recall_{suffix}'] == pytest.approx(1.0)
+                assert metrics[f'Tm02_RMSE_{suffix}'] == pytest.approx(0.0, abs=1e-6)
+                assert metrics[f'Tm02_Bias_{suffix}'] == pytest.approx(0.0, abs=1e-6)
+
+    def test_missed_partition_excluded_from_tm02_but_counted_in_peak_n(self):
+        """A partition the model's prediction carries essentially none of
+        the true in-window energy for must be dropped from the Tm02 bucket
+        (ill-conditioned near-zero mass) while still counting toward
+        Peak_*_n — Peak_Separation_Recall (not Tm02) is what's supposed to
+        register that specific miss."""
+        primary = _jonswap(FREQS, 2.0, 8.0)     # fp=0.125 Hz -> wind_sea
+        secondary = _jonswap(FREQS, 1.0, 16.0)  # fp=0.0625 Hz -> swell
+        true = primary + secondary
+        pred = primary  # model produces only the primary peak
+
+        windows = find_peak_windows(FREQS, true)
+        assert len(windows) == 2  # precondition
+
+        metrics, mask = peak_modality_metrics(FREQS, pred[np.newaxis, :], true[np.newaxis, :])
+
+        assert mask[0]
+        assert metrics['Peak_windsea_n'] + metrics['Peak_swell_n'] == 2
+        # The missed (swell) partition is excluded from the Tm02 buckets...
+        assert metrics['Tm02_windsea_n'] + metrics['Tm02_swell_n'] < 2
+        # ...but Peak_Separation_Recall for that label still reflects the miss.
+        assert metrics['Peak_Separation_Recall_swell'] == pytest.approx(0.0)
+        assert metrics['Peak_Separation_Recall_windsea'] == pytest.approx(1.0)
+        assert np.isnan(metrics['Tm02_RMSE_swell'])
+        assert np.isfinite(metrics['Tm02_RMSE_windsea'])
