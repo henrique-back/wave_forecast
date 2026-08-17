@@ -12,3 +12,4 @@ from .save_progress import save_progress
 from .loss import RMSELoss, DirectionalLoss, SpectralWassersteinLoss, SpectralKLDivergenceLoss, SoftPeakHeightLoss
 from .spectral_partitioning import classify_partition, classify_partitions, find_significant_peaks, find_peak_windows
 from .spectral_peaks import find_spectral_peaks, peak_modality_metrics
+from .require_slurm import require_slurm

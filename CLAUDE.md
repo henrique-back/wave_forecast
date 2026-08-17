@@ -19,6 +19,15 @@ All commands should be run from the repo root with the virtualenv active:
 source .venv/bin/activate
 ```
 
+**GPU-heavy scripts must go through Slurm, not run directly.** wavetank's GPU is shared across the group (netuno is the alternative host, same RAM, GPU usually free) — `scripts/optimize.py`, `scripts/train.py`, and `scripts/ablate_loss.py` all call `utils.require_slurm()` at startup and exit immediately if `SLURM_JOB_ID` isn't set (bypass deliberately, e.g. for a short CPU-only smoke test, with `WAVE_FORECAST_ALLOW_NO_SLURM=1`). Copy `slurm/run.slurm.template` (see `slurm/ablate_*.slurm` for worked examples), fill in `--job-name` and the `python` line, adjust `--time`/`--mem`/`--cpus-per-task` for the run, then:
+```bash
+mkdir -p logs
+sbatch slurm/your_job.slurm     # prints "Submitted batch job <N>"
+squeue -u $USER                 # monitor
+scancel <N>                     # cancel
+```
+Chain dependent runs (e.g. a retrain that must wait on a search) with `sbatch --dependency=afterok:<N> ...` — see `slurm/submit_ablation.sh` for a worked multi-job example. Everything below that invokes one of those three scripts assumes it's wrapped in a `.slurm` file this way, even where the command line just shows the bare `python ...` invocation for brevity.
+
 **Run tests:**
 ```bash
 pytest tests/
@@ -34,14 +43,19 @@ pytest tests/test_spectral.py::TestJONSWAPRoundTrip::test_hs_after_roundtrip
 python scripts/data_processing.py
 ```
 
-**Run hyperparameter optimization** (edit the config constants at the top of the file first — `EXPERIMENT_NAME`, `target`, `CHANNEL_SET`, `AUX_SET`, `OBJECTIVE_METRIC`, `lead_times_hours`):
+**Run hyperparameter optimization** (edit the config constants at the top of the file first — `EXPERIMENT_NAME`, `target`, `CHANNEL_SET`, `AUX_SET`, `OBJECTIVE_METRIC`, `lead_times_hours`; submit via Slurm, see above):
 ```bash
-python scripts/optimize.py
+sbatch slurm/your_optimize_job.slurm    # runs `python scripts/optimize.py`
 ```
 
-**Retrain a final model** from an Optuna study's best hyperparameters and evaluate on the held-out test set:
+**Retrain a final model** from an Optuna study's best hyperparameters and evaluate on the held-out test set (submit via Slurm, see above):
 ```bash
-python scripts/train.py
+sbatch slurm/your_train_job.slurm       # runs `python scripts/train.py`
+```
+
+**Run the KL/Wasserstein/peak composite-loss ablation** (`scripts/ablate_loss.py` — fixed architecture pinned from a prior Optuna study, searches only the loss-term weight(s); see its module docstring for the phase sequence and dependency graph). Submit each phase via Slurm; `slurm/submit_ablation.sh` submits and dependency-chains all five in one shot:
+```bash
+bash slurm/submit_ablation.sh
 ```
 
 **Inspect a trained model's predictions** on test-set samples (autoregressive inference + plots):

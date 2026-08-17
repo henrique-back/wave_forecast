@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Generic Slurm submission template for this project's GPU-heavy scripts
+# (scripts/optimize.py, scripts/train.py, scripts/ablate_loss.py, or any
+# future one) — wavetank's GPU is shared across the group via Slurm, and
+# these scripts refuse to run directly outside a Slurm allocation (see
+# utils/require_slurm.py and CLAUDE.md's Commands section).
+#
+# Copy this file, rename it, fill in --job-name and the final `python`
+# line, and adjust --time/--mem/--cpus-per-task for the run's actual needs
+# (see slurm/ablate_*.slurm for worked examples: 5-30h depending on trial
+# count). Then:
+#     mkdir -p logs
+#     sbatch slurm/your_new_file.slurm
+# Monitor:  squeue -u $USER
+# Cancel:   scancel <job id>
+
+#SBATCH --job-name=CHANGE_ME
+#SBATCH --partition=gpu
+#SBATCH --qos=normal
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+set -euo pipefail
+
+cd /home/g1/henriqueb/Projetos/wave_forecast
+source .venv/bin/activate
+python scripts/CHANGE_ME.py

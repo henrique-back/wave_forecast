@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Slurm job stdout/stderr (see slurm/) — transient, re-creatable per run;
+# unlike results/*.pt checkpoints and optuna_study_*.db (both committed —
+# existing project convention), these have no standalone research value.
+/logs/

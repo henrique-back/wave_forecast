@@ -89,7 +89,7 @@ import torch
 
 from nn import WaveHeightBaselineNN
 from nn.optimization import _prepare_dataloaders, _train_model
-from utils import get_freqs, set_seed, get_device, empty_cache, save_progress
+from utils import get_freqs, set_seed, get_device, empty_cache, save_progress, require_slurm
 
 set_seed(42)
 
@@ -277,6 +277,8 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
 
 
 def main():
+    require_slurm("scripts/ablate_loss.py")
+
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--phase", required=True,

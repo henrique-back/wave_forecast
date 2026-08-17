@@ -4,6 +4,9 @@ import os
 import subprocess
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from utils import require_slurm
+require_slurm("scripts/optimize.py")
+
 from pathlib import Path
 import pandas as pd
 import torch

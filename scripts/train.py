@@ -16,6 +16,9 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from utils import require_slurm
+require_slurm("scripts/train.py")
+
 import ast
 import json
 import re
