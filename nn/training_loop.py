@@ -1,12 +1,76 @@
 from utils import (get_start_token, RMSELoss, trapz_weights, to_log_space,
-                   SpectralWassersteinLoss, SpectralKLDivergenceLoss)
+                   SpectralWassersteinLoss, SpectralKLDivergenceLoss,
+                   SoftPeakHeightLoss, find_peak_windows)
+import numpy as np
 import torch
 from tqdm import tqdm
 
 
+def _peak_windows_for_batch(y_batch, freqs_np, max_peaks=4, f_max=0.4,
+                             energy_frac=0.05, min_bins=2):
+    """Per-batch, per-step peak-window detection for SoftPeakHeightLoss.
+
+    Pragmatic alternative to the "precompute once, at data-preparation
+    time" design utils.loss.SoftPeakHeightLoss's docstring calls for (see
+    also utils.spectral_partitioning.find_peak_windows's docstring) — doing
+    it here, per training batch, pays scipy.signal.find_peaks' Python-loop
+    cost every batch of every epoch rather than once per trial.
+    Deliberately accepted for now: this path only runs when
+    peak_loss_weight > 0 (zero cost otherwise), and threading a
+    precomputed, dataset-level peak-window tensor through
+    WaveSpectralDataset/_prepare_dataloaders would touch every consumer of
+    that Dataset's (src, aux, y_batch) 3-tuple across nn/evaluate.py and
+    every scripts/*.py that iterates a DataLoader directly — a larger
+    refactor than this loss-ablation ablation's peak-loss arm currently
+    justifies. Revisit (move to _prepare_dataloaders, computed once per
+    trial like freq_means/shape_means) if profiling shows this dominates
+    trial wall-clock time.
+
+    Parameters
+    ----------
+    y_batch : torch.Tensor, shape (batch, lead_time, num_freqs)
+        LOG-space true spectrum (already floored/converted — see
+        train_one_epoch). Exponentiated internally.
+    freqs_np : np.ndarray, shape (num_freqs,)
+    max_peaks : int
+        Fixed padding width for the peak axis — a (sample, step) with
+        fewer real peaks gets padding slots (peak_mask=False there,
+        SoftPeakHeightLoss excludes them); one with MORE than max_peaks
+        significant peaks (rare — see find_significant_peaks' Portilla
+        criteria) has its highest-frequency extras dropped (windows come
+        back in ascending-frequency order from find_peak_windows).
+    f_max, energy_frac, min_bins : forwarded to find_peak_windows.
+
+    Returns
+    -------
+    left_idx, right_idx : torch.LongTensor, shape (batch, lead_time, max_peaks)
+    peak_mask : torch.BoolTensor, shape (batch, lead_time, max_peaks)
+    """
+    batch, lead_time, _ = y_batch.shape
+    true_phys = torch.exp(y_batch).detach().cpu().numpy()
+
+    left_idx = np.zeros((batch, lead_time, max_peaks), dtype=np.int64)
+    right_idx = np.zeros((batch, lead_time, max_peaks), dtype=np.int64)
+    peak_mask = np.zeros((batch, lead_time, max_peaks), dtype=bool)
+
+    for b in range(batch):
+        for t in range(lead_time):
+            windows = find_peak_windows(freqs_np, true_phys[b, t], f_max, energy_frac, min_bins)
+            for k, (_, l, r) in enumerate(windows[:max_peaks]):
+                left_idx[b, t, k] = l
+                right_idx[b, t, k] = r
+                peak_mask[b, t, k] = True
+
+    device = y_batch.device
+    return (torch.from_numpy(left_idx).to(device),
+            torch.from_numpy(right_idx).to(device),
+            torch.from_numpy(peak_mask).to(device))
+
+
 def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
                     tf_ratio=1.0, freq_means=None, shape_means=None,
-                    wasserstein_loss_weight=0.0, kl_loss_weight=0.0):
+                    wasserstein_loss_weight=0.0, kl_loss_weight=0.0,
+                    base_loss_weight=1.0, peak_loss_weight=0.0, peak_max_count=4):
     """Train for one epoch and return {'RMSE': avg_loss}.
 
     avg_loss is the mean per-sample training loss actually optimised: RMSE
@@ -70,6 +134,31 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         a peak that broadens into its neighbourhood (while still covering
         its true bin) relative to the current frequency-weighted
         log-space MSE, which penalizes that case more than a full shift.
+    base_loss_weight : float, default 1.0 (no behavior change)
+        Multiplies the main per-bin loss term (loss_fn above) before any
+        auxiliary term is added. Exists for the loss-ablation study
+        (CLAUDE.md's KL/Wasserstein/peak composite-loss discussion): set to
+        0.0 to literally SUBSTITUTE the per-bin loss with (a combination
+        of) the auxiliary terms below, rather than adding them on top of
+        it — matching the ablation's original proposal
+        L = D_KL + lambda_1*W2(shape) + lambda_2*L_peak, which has no
+        per-bin MSE term at all. Left at 1.0 for every non-ablation caller.
+    peak_loss_weight : float
+        target in ('density', 'shape') only. Default 0.0 (no behavior
+        change). When > 0, adds peak_loss_weight *
+        utils.SoftPeakHeightLoss(y_pred, y_batch, freqs, left_idx,
+        right_idx, peak_mask) to the loss — a differentiable "soft peak
+        height" term (see utils/loss.py) that, unlike wasserstein_loss_weight/
+        kl_loss_weight, needs per-(sample, step) peak windows computed from
+        y_batch first; see _peak_windows_for_batch above for why that's done
+        per-batch here rather than precomputed once per trial. Skipped (no
+        contribution to the loss) for any batch where SoftPeakHeightLoss's
+        'mean' reduction returns NaN (no sample in that batch has ANY
+        detected peak — see that class's K=0 handling) rather than
+        poisoning the whole batch's gradient with a NaN loss.
+    peak_max_count : int, default 4
+        Forwarded to _peak_windows_for_batch as max_peaks — see its
+        docstring. No-op when peak_loss_weight == 0.
 
     For 'density'/'shape' targets, the loss is additionally weighted across
     the frequency axis by utils.trapz_weights(freqs) — the grid is
@@ -83,11 +172,14 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
     loss_fn = RMSELoss()
     wasserstein_loss_fn = SpectralWassersteinLoss()
     kl_loss_fn = SpectralKLDivergenceLoss()
+    peak_loss_fn = SoftPeakHeightLoss()
 
     freq_weights = None
+    freqs_np = None
     if model.target in ('density', 'shape') and freqs is not None:
+        freqs_np = freqs.cpu().numpy()
         freq_weights = torch.from_numpy(
-            trapz_weights(freqs.cpu().numpy())
+            trapz_weights(freqs_np)
         ).to(device=device, dtype=torch.float32)
 
     loop = tqdm(dataloader, desc='Training', leave=False)
@@ -166,13 +258,20 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         # needed here. 'hs': unchanged RMSE on physical metres (see
         # prepare_y and get_start_token).
         squared = model.target in ('density', 'shape')
-        loss = loss_fn(y_pred, y_batch, weights=freq_weights, squared=squared)
+        loss = base_loss_weight * loss_fn(y_pred, y_batch, weights=freq_weights, squared=squared)
 
         if model.target in ('density', 'shape') and wasserstein_loss_weight > 0:
             loss = loss + wasserstein_loss_weight * wasserstein_loss_fn(y_pred, y_batch, freqs)
 
         if model.target in ('density', 'shape') and kl_loss_weight > 0:
             loss = loss + kl_loss_weight * kl_loss_fn(y_pred, y_batch, freqs)
+
+        if model.target in ('density', 'shape') and peak_loss_weight > 0:
+            left_idx, right_idx, peak_mask = _peak_windows_for_batch(
+                y_batch, freqs_np, max_peaks=peak_max_count)
+            peak_term = peak_loss_fn(y_pred, y_batch, freqs, left_idx, right_idx, peak_mask)
+            if not torch.isnan(peak_term):
+                loss = loss + peak_loss_weight * peak_term
 
         optimizer.zero_grad()
         loss.backward()

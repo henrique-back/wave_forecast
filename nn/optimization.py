@@ -141,7 +141,8 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
 def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                   shape_means, target, lead_time, lr, weight_decay, objective_metric,
                   num_epochs=80, patience=10, trial=None, wasserstein_loss_weight=0.0,
-                  kl_loss_weight=0.0):
+                  kl_loss_weight=0.0, base_loss_weight=1.0, peak_loss_weight=0.0,
+                  peak_max_count=4):
     """Run the scheduled-sampling training loop with early stopping.
 
     Shared by objective() (Optuna trial) and scripts/train.py (fixed-config
@@ -155,7 +156,10 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         Tuned by objective() as of optimize.py v12 (trial.suggest_float
         'wasserstein_loss_weight'); scripts/train.py reads the winning
         trial's value back out of best_trial.txt's params rather than
-        setting it manually.
+        setting it manually. NOTE: SpectralWassersteinLoss switched from
+        Wasserstein-1 to Wasserstein-2 on 2026-08-17 (see utils/loss.py) —
+        weights tuned before that date are on a different numeric scale
+        and not directly comparable to weights tuned after it.
     kl_loss_weight : float, target in ('density', 'shape') only, default
         0.0 (no behavior change) — forwarded to train_one_epoch's auxiliary
         SpectralKLDivergenceLoss term (see nn/training_loop.py /
@@ -166,6 +170,14 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         a manual-A/B-sweep-only parameter for now (Stage 1); promoting it
         to the search space (Stage 2) bumps STUDY_VERSION per the existing
         convention for any new objective() hyperparameter.
+    base_loss_weight : float, default 1.0 (no behavior change) — forwarded
+        to train_one_epoch; see its docstring. Only ever changed by the
+        loss-ablation study (scripts/ablate_loss.py), which sets it to 0.0
+        to literally substitute the per-bin loss rather than add to it.
+    peak_loss_weight, peak_max_count : forwarded to train_one_epoch's
+        auxiliary SoftPeakHeightLoss term — see its docstring and
+        utils/loss.py's SoftPeakHeightLoss. Like kl_loss_weight, not yet
+        in objective()'s search space; manual-A/B/ablation-only for now.
 
     Returns (best_val_score, best_val_metrics, best_model_state) — note
     best_val_score is the SMOOTHED score (see VAL_SCORE_SMOOTHING_WINDOW
@@ -236,7 +248,10 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                                         tf_ratio=tf_ratio, freq_means=freq_means,
                                         shape_means=shape_means,
                                         wasserstein_loss_weight=wasserstein_loss_weight,
-                                        kl_loss_weight=kl_loss_weight)
+                                        kl_loss_weight=kl_loss_weight,
+                                        base_loss_weight=base_loss_weight,
+                                        peak_loss_weight=peak_loss_weight,
+                                        peak_max_count=peak_max_count)
         val_metrics   = evaluate(model, val_loader, device, freqs,
                                   lead_time=lead_time, freq_means=freq_means,
                                   shape_means=shape_means)
