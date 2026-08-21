@@ -1,4 +1,5 @@
 import math
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -108,6 +109,44 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
                              _FINAL_STEP_SS_WASSERSTEIN_BETA's comment for why
                              this exists and why its weight is NOT the same
                              as the training-time wasserstein_loss_weight.
+        'peak_fidelity_SS' : NOT rooted in RMSE — see module docstring below
+                             for why that matters for scripts/ablate_loss.py.
+                             recall - rel_err, where rel_err is the mean of
+                             Peak_Height_RelError_windsea/_swell (lower
+                             better) and recall is the mean of
+                             Peak_Separation_Recall_windsea/_swell (higher
+                             better) — both from utils.spectral_peaks.
+                             peak_modality_metrics, target=='shape' only.
+                             Requires compute_peak_metrics=True on the
+                             evaluate() call that produced `metrics`
+                             (KeyError otherwise — deliberately not silently
+                             falling back to an RMSE-rooted metric, which
+                             would defeat the point). float('-inf') if no
+                             true peak was detected in EITHER label across
+                             the whole validation pass (both quantities NaN
+                             together by construction — see
+                             peak_modality_metrics) rather than propagating
+                             NaN into the LR scheduler/pruner.
+
+    A note on 'peak_fidelity_SS' specifically: this project's loss-ablation
+    study (scripts/ablate_loss.py) trains several of its arms on a loss that
+    is NOT RMSE at all (base_loss_weight=0 — see nn/training_loop.py's
+    docstring) — substituting the per-bin loss with SpectralKLDivergenceLoss/
+    SpectralWassersteinLoss/SoftPeakHeightLoss instead. Every other
+    objective_metric above (including 'final_step_SS_wasserstein') is a
+    transform of RMSE (SS = 1 - RMSE_model/RMSE_persistence); using one of
+    those to pick the best epoch/trial for a run that isn't optimizing RMSE
+    reintroduces exactly the structural blur-bias problem the ablation's own
+    scoreboard (utils.spectral_peaks.peak_modality_metrics's wind-sea/swell
+    breakdown) exists to avoid — a candidate barely perturbed away from
+    RMSE-friendly behaviour would look spuriously "best" regardless of
+    whether it actually improved peak fidelity, silently biasing which
+    kl_loss_weight/wasserstein_loss_weight/peak_loss_weight gets reported as
+    the winner. 'peak_fidelity_SS' is not adversarial to any of those
+    losses (all three are explicitly trying to improve peak/multimodal
+    fidelity, so this tracks a reasonable, non-circular proxy for "did it
+    work" without being identical to any one loss term itself, the same way
+    the final cross-arm comparison already avoids Shape_RMSE/SS).
     """
     if objective_metric == 'final_step_SS':
         return metrics['per_step_SS'][-1]
@@ -129,12 +168,28 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         return -metrics['SI_mean']
     elif objective_metric == 'final_step_SS_wasserstein':
         return metrics['per_step_SS'][-1] - _FINAL_STEP_SS_WASSERSTEIN_BETA * metrics['Shape_Wasserstein']
+    elif objective_metric == 'peak_fidelity_SS':
+        # nanmean over an all-NaN slice raises numpy's "Mean of empty slice"
+        # RuntimeWarning (Python's warnings machinery, not an IEEE-754
+        # errstate one -- np.errstate doesn't touch it) -- checked for and
+        # handled explicitly below, so filter it here rather than let it
+        # spam the log on every epoch of a run with genuinely no detectable
+        # peaks in one label.
+        rel_errs = [metrics['Peak_Height_RelError_windsea'], metrics['Peak_Height_RelError_swell']]
+        recalls = [metrics['Peak_Separation_Recall_windsea'], metrics['Peak_Separation_Recall_swell']]
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', category=RuntimeWarning)
+            rel_err = float(np.nanmean(rel_errs))
+            recall = float(np.nanmean(recalls))
+        if np.isnan(rel_err) or np.isnan(recall):
+            return float('-inf')
+        return recall - rel_err
     else:
         raise ValueError(
             f"Unknown objective_metric {objective_metric!r}. Valid: "
             "'final_step_SS', 'weighted_mean_SS', 'overall_SS', 'Hs_SS', "
             "'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean', "
-            "'final_step_SS_wasserstein'"
+            "'final_step_SS_wasserstein', 'peak_fidelity_SS'"
         )
 
 
@@ -142,13 +197,21 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                   shape_means, target, lead_time, lr, weight_decay, objective_metric,
                   num_epochs=80, patience=10, trial=None, wasserstein_loss_weight=0.0,
                   kl_loss_weight=0.0, base_loss_weight=1.0, peak_loss_weight=0.0,
-                  peak_max_count=4):
+                  peak_max_count=4, compute_peak_metrics=False):
     """Run the scheduled-sampling training loop with early stopping.
 
     Shared by objective() (Optuna trial) and scripts/train.py (fixed-config
     final retrain) so the two never drift apart. When `trial` is given,
     reports the per-epoch score to Optuna and prunes on its signal; this is
     the only behavioural difference between the two callers.
+
+    compute_peak_metrics : bool, default False (no behavior change) —
+        forwarded to every per-epoch evaluate(..., compute_peak_metrics=...)
+        call. Only needs to be True when objective_metric == 'peak_fidelity_
+        SS' (scripts/ablate_loss.py) — left False for every other caller
+        (the live shape_v12-style objective() search) to avoid the extra
+        per-epoch scipy peak-detection pass over the validation set when
+        nothing consumes its output.
 
     wasserstein_loss_weight : float, target == 'shape' only, default 0.0 (no
         behavior change) — forwarded to train_one_epoch's auxiliary
@@ -254,7 +317,8 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
                                         peak_max_count=peak_max_count)
         val_metrics   = evaluate(model, val_loader, device, freqs,
                                   lead_time=lead_time, freq_means=freq_means,
-                                  shape_means=shape_means)
+                                  shape_means=shape_means,
+                                  compute_peak_metrics=compute_peak_metrics)
 
         val_score = _compute_val_score(val_metrics, objective_metric)
         val_score_history.append(val_score)
