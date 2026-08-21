@@ -1,0 +1,21 @@
+Phase: baseline
+Lead time (hours): 12
+Best trial parameters:
+{}
+val_Bias: 0.2718072235584259
+val_CC: 0.946397066116333
+val_Hs_MAPE: None
+val_Peak_Height_RelError_swell: 0.4757692515850067
+val_Peak_Height_RelError_windsea: 0.3785766065120697
+val_Peak_Separation_Recall_swell: 0.6857810067462377
+val_Peak_Separation_Recall_windsea: 0.7123311395912713
+val_Peak_swell_n: 3854
+val_Peak_windsea_n: 5774
+val_R2: 0.8913969993591309
+val_RMSE: 1.386367678642273
+val_Shape_Mass_Error: 4.9255504563916475e-08
+val_Shape_RMSE: 3.0352184772491455
+val_Shape_SS: -0.20901278774127308
+val_Tm02_RMSE_swell: 0.8943292207265718
+val_Tm02_RMSE_windsea: 0.17123951009902355
+val_overall_SS: 0.02684122619547702

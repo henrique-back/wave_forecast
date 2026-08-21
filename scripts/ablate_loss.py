@@ -38,11 +38,25 @@ in order):
                  L_peak formula, which has no per-bin MSE term at all —
                  see nn/training_loop.py::train_one_epoch's docstring).
                  Searches kl_loss_weight only.
+    wasserstein_only  base_loss_weight=0, kl_loss_weight=0 (no dependency
+                 on 'kl' finishing), searches wasserstein_loss_weight
+                 alone substituting the per-bin loss outright. Answers a
+                 different question than 'wasserstein' below: does
+                 Wasserstein need KL underneath it to be useful, or does
+                 it work fine on its own?
+    peak_only    base_loss_weight=0, kl_loss_weight=0, searches
+                 peak_loss_weight alone -- same question as
+                 wasserstein_only, for the peak term.
     wasserstein  base_loss_weight=0, kl_loss_weight fixed at 'kl' phase's
                  winner, searches wasserstein_loss_weight only (fresh
                  range, see the W1->W2 note above).
     peak         base_loss_weight=0, kl_loss_weight fixed at 'kl' phase's
-                 winner, searches peak_loss_weight only.
+                 winner, searches peak_loss_weight only. NOTE: this IS the
+                 "KL + Peak, no Wasserstein" combination -- its own
+                 fixed_loss_weights (saved in best_model.pt) already
+                 records kl_loss_weight alongside the searched
+                 peak_loss_weight, so no separate phase is needed for that
+                 specific question.
     combined     base_loss_weight=0, kl_loss_weight fixed, searches
                  (wasserstein_loss_weight, peak_loss_weight) jointly in a
                  range centered on the 'wasserstein'/'peak' phases'
@@ -94,19 +108,46 @@ from utils import get_freqs, set_seed, get_device, empty_cache, save_progress, r
 set_seed(42)
 
 BUOY_ID = "32012"
-STUDY_VERSION = "lossablation_v1"
+# v1 -> v2 (2026-08-19): OBJECTIVE_METRIC switched from 'final_step_SS' to
+# 'peak_fidelity_SS' -- final_step_SS is an RMSE transform, and using it to
+# pick the best epoch/trial for arms that don't train on RMSE at all
+# (base_loss_weight=0) silently biased weight-selection toward whichever
+# value stayed closest to unperturbed RMSE-friendly behavior. v1's DB/
+# results (baseline/kl/wasserstein completed, peak killed ~12h in) are
+# incomparable and kept as historical record, per this project's own
+# STUDY_VERSION convention (see scripts/optimize.py) -- not deleted, just
+# superseded.
+STUDY_VERSION = "lossablation_v2"
 LEAD_TIME_HOURS = 12
 TARGET = "shape"
 CHANNEL_SET = "full"
 AUX_SET = "dmd"
-OBJECTIVE_METRIC = "final_step_SS"  # deliberately NOT 'final_step_SS_wasserstein'
-                                     # — that blend rewards low Shape_Wasserstein
-                                     # specifically, which would bias checkpoint
-                                     # selection in favor of whichever arm's own
-                                     # loss term happens to move Shape_Wasserstein,
-                                     # even for arms (baseline/kl) that never
-                                     # touch it. Plain final_step_SS applies the
-                                     # same neutral criterion to every phase.
+OBJECTIVE_METRIC = "peak_fidelity_SS"  # NOT 'final_step_SS' (2026-08-19 fix —
+                                     # see nn/optimization.py::_compute_val_score's
+                                     # docstring). final_step_SS/final_step_SS_
+                                     # wasserstein are both transforms of RMSE
+                                     # (SS = 1 - RMSE_model/RMSE_persistence);
+                                     # using either to pick the best epoch/trial
+                                     # while base_loss_weight=0 arms train on
+                                     # something other than RMSE entirely
+                                     # reintroduces the exact blur-bias problem
+                                     # this ablation's own scoreboard exists to
+                                     # avoid — silently biasing which weight gets
+                                     # reported as the winner toward whichever
+                                     # one stayed closest to unperturbed
+                                     # RMSE-friendly behaviour, regardless of
+                                     # whether it actually improved peak
+                                     # fidelity. 'peak_fidelity_SS' is not
+                                     # rooted in RMSE and is applied uniformly
+                                     # to every phase, including 'baseline' —
+                                     # even though baseline's own per-bin loss
+                                     # IS RMSE-like (so final_step_SS would have
+                                     # been self-consistent for that one phase
+                                     # specifically), using the SAME criterion
+                                     # everywhere is simpler to defend than a
+                                     # special-cased exception, and peak
+                                     # fidelity is a reasonable, non-adversarial
+                                     # proxy even for an RMSE-trained model.
 MAX_PEAKS = 4
 
 # Architecture + training hyperparameters pinned from
@@ -125,8 +166,10 @@ PINNED_CONFIG = dict(
     weight_decay=0.0004182586391136781,
 )
 
-PHASE_N_TRIALS = {"baseline": 5, "kl": 15, "wasserstein": 15, "peak": 15, "combined": 18}
-PHASE_N_STARTUP = {"baseline": 5, "kl": 5, "wasserstein": 5, "peak": 5, "combined": 8}
+PHASE_N_TRIALS = {"baseline": 5, "kl": 15, "wasserstein_only": 15, "peak_only": 15,
+                  "wasserstein": 15, "peak": 15, "combined": 18}
+PHASE_N_STARTUP = {"baseline": 5, "kl": 5, "wasserstein_only": 5, "peak_only": 5,
+                   "wasserstein": 5, "peak": 5, "combined": 8}
 
 
 def _phase_dir(phase):
@@ -159,6 +202,14 @@ def _fixed_weights_for_phase(phase):
         return 1.0, dict(kl_loss_weight=0.0, wasserstein_loss_weight=0.0, peak_loss_weight=0.0)
     if phase == "kl":
         return 0.0, dict(wasserstein_loss_weight=0.0, peak_loss_weight=0.0)
+    if phase == "wasserstein_only":
+        return 0.0, dict(kl_loss_weight=0.0, peak_loss_weight=0.0)
+    if phase == "peak_only":
+        return 0.0, dict(kl_loss_weight=0.0, wasserstein_loss_weight=0.0)
+    # Everything below builds on 'kl's winning weight -- no dependency on it
+    # for wasserstein_only/peak_only above, which is exactly their point:
+    # do Wasserstein/Peak need KL underneath to substitute the per-bin loss
+    # (as 'wasserstein'/'peak' below assume), or do they work fine alone?
     kl_w = _read_prior_weight("kl", "kl_loss_weight")
     if phase == "wasserstein":
         return 0.0, dict(kl_loss_weight=kl_w, peak_loss_weight=0.0)
@@ -182,10 +233,13 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
             # clipping (max_norm=1.0, see train_one_epoch) bounds the downside
             # of a too-large draw, so a wide bracket is reasonable to explore.
             weights["kl_loss_weight"] = trial.suggest_float("kl_loss_weight", 0.1, 50.0, log=True)
-        elif phase == "wasserstein":
+        elif phase in ("wasserstein", "wasserstein_only"):
+            # Same range for both -- same parameter, same mechanism; the
+            # only difference is whether kl_loss_weight is fixed nonzero
+            # (see _fixed_weights_for_phase) or pinned to 0 alongside it.
             weights["wasserstein_loss_weight"] = trial.suggest_float(
                 "wasserstein_loss_weight", 1.0, 200.0, log=True)
-        elif phase == "peak":
+        elif phase in ("peak", "peak_only"):
             weights["peak_loss_weight"] = trial.suggest_float(
                 "peak_loss_weight", 0.01, 20.0, log=True)
         elif phase == "combined":
@@ -233,6 +287,7 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
                 wasserstein_loss_weight=weights.get("wasserstein_loss_weight", 0.0),
                 peak_loss_weight=weights.get("peak_loss_weight", 0.0),
                 peak_max_count=MAX_PEAKS,
+                compute_peak_metrics=True,
             )
         except torch.OutOfMemoryError:
             del model
@@ -267,7 +322,11 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
 
         if best_val_metrics is not None:
             for key in ['RMSE', 'Hs_MAPE', 'CC', 'Bias', 'R2', 'overall_SS',
-                        'Shape_RMSE', 'Shape_SS', 'Shape_Mass_Error']:
+                        'Shape_RMSE', 'Shape_SS', 'Shape_Mass_Error',
+                        'Peak_Height_RelError_windsea', 'Peak_Height_RelError_swell',
+                        'Peak_Separation_Recall_windsea', 'Peak_Separation_Recall_swell',
+                        'Peak_windsea_n', 'Peak_swell_n',
+                        'Tm02_RMSE_windsea', 'Tm02_RMSE_swell']:
                 if key in best_val_metrics:
                     trial.set_user_attr(f'val_{key}', best_val_metrics[key])
 
@@ -282,7 +341,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--phase", required=True,
-                         choices=["baseline", "kl", "wasserstein", "peak", "combined"])
+                         choices=["baseline", "kl", "wasserstein_only", "peak_only",
+                                  "wasserstein", "peak", "combined"])
     args = parser.parse_args()
     phase = args.phase
 

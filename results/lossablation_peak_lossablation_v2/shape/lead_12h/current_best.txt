@@ -1,0 +1,2 @@
+Best value: 0.5693409250393333
+Best params: {'peak_loss_weight': 17.64789106766596}
