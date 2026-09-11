@@ -557,7 +557,28 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
 
 def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, target,
               objective_metric='weighted_mean_SS', results_folder=None,
-              wind=None, channel_set='full', aux_set='none'):
+              wind=None, channel_set='full', aux_set='none',
+              base_loss_weight=1.0, compute_peak_metrics=False,
+              fixed_head_dim=None, fixed_nhead=None):
+    """
+    fixed_head_dim, fixed_nhead : int | None, default None (search both as
+        before — fully backward compatible). See their comment at the
+        head_dim/nhead sampling site below for the cross-version tally
+        motivating v13's choice to pin both (32, 8) for target == 'shape'.
+    base_loss_weight : float, default 1.0 — forwarded to _train_model/
+        train_one_epoch unchanged (see that docstring). Left at 1.0 (the
+        per-bin loss trains normally) for every target/study EXCEPT the
+        v13 KL+Wasserstein+Peak composite-loss search (scripts/optimize.py),
+        which passes 0.0 to literally substitute it, per
+        scripts/ablate_loss.py's validated 'combined' recipe — this is
+        NOT validated for target in ('hs', 'density'), so callers for
+        those targets must not pass 0.0 here.
+    compute_peak_metrics : bool, default False — forwarded to
+        _train_model/evaluate(). Must be True whenever objective_metric ==
+        'peak_fidelity_SS' (see _compute_val_score's docstring) — that
+        metric needs the wind-sea/swell panel evaluate() only computes
+        when this flag is set.
+    """
     # set_seed() is called once at script level — do NOT call it here.
     # Resetting the RNG inside objective() makes every trial start from the same
     # random state, collapsing the variance Optuna needs to learn from.
@@ -600,8 +621,30 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     embed_dropout = trial.suggest_float('embed_dropout', 0.0, 0.3)
     # embed_dim derived as head_dim × nhead so it is always divisible by nhead.
     # nhead starts at 4 so the minimum embed_dim is 8×4=32.
-    head_dim = trial.suggest_categorical('head_dim', [8, 16, 32])
-    nhead = trial.suggest_categorical('nhead', [4, 8])
+    #
+    # fixed_head_dim/fixed_nhead (v13, new, both default None = search as
+    # before): a cross-version tally of every completed shape-target study
+    # sharing this search-space shape (shape_v10/v11's best_trial.txt,
+    # shape_v12's current_best.txt — 8 (study, lead_time) data points total)
+    # found head_dim=32 winning 6/8 and nhead=8 winning 6/8, vs. no other
+    # hyperparameter in this function showing anywhere near that level of
+    # cross-lead-time/cross-version agreement (seq_len/batch_size/dropouts/
+    # weight_decay each span nearly their entire range with no consensus
+    # value — see results/lossablation_comparison_v2.md-adjacent analysis
+    # for the full tally). NOT unanimous (shape_v12 itself picked 8/16/32
+    # across its own 3 lead times) and NOT extended to num_encoder_layers
+    # despite a similar-looking 5/8 for value 4 — that one's dissenting
+    # picks include a lead_time (shape_v10's 6h) picking a very different
+    # value (1), suggesting genuine lead-time-dependent capacity need
+    # rather than noise, unlike head_dim/nhead's dissents.
+    if fixed_head_dim is not None:
+        head_dim = fixed_head_dim
+    else:
+        head_dim = trial.suggest_categorical('head_dim', [8, 16, 32])
+    if fixed_nhead is not None:
+        nhead = fixed_nhead
+    else:
+        nhead = trial.suggest_categorical('nhead', [4, 8])
     embed_dim = head_dim * nhead
     num_encoder_layers = trial.suggest_int('num_encoder_layers', 1, 4)
     num_decoder_layers = trial.suggest_int('num_decoder_layers', 1, 4)
@@ -614,18 +657,35 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     # an optimal region, so this keeps the original wide range to let Optuna
     # re-discover it under the new optimizer.
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-2, log=True)
-    # target == 'shape' only (no-op otherwise — see train_one_epoch). Range
-    # from a manual sweep (not committed) reusing shape_v11's exact other
-    # hyperparameters: weights 50 and 150 both improved every metric
-    # (Shape_RMSE/SS, peak-separation recall, unimodal AND multimodal SS)
-    # monotonically over the 0-weight baseline, with no sign of diminishing
-    # returns yet at 150 — the upper bound here (400) is deliberately well
-    # above the highest manually-tested value rather than assuming 150 was
-    # near-optimal; the lower bound (10) sits below 50 (the smallest value
-    # that showed a real effect) so Optuna can still discover "less matters"
-    # across the wider hyperparameter space this searches vs. the manual
-    # sweep's fixed other-hyperparameters test.
-    wasserstein_loss_weight = trial.suggest_float('wasserstein_loss_weight', 10.0, 400.0, log=True)
+    # target == 'shape' only (no-op otherwise — see train_one_epoch).
+    #
+    # v13: range replaced wholesale (was 10-400, tuned under the OLD
+    # Wasserstein-1 metric — see utils/loss.py's 2026-08-17 W1->W2 switch,
+    # which changed what this weight is even balanced against). The new
+    # 1-200 bracket is exactly what scripts/ablate_loss.py's small, fixed-
+    # architecture ablation (STUDY_VERSION lossablation_v2) validated under
+    # the CURRENT W2 metric: winning weights of ~9 (Wasserstein alone),
+    # ~154 (Wasserstein + KL), ~77 (KL + Wasserstein + Peak, i.e. the
+    # 'combined' recipe this study searches) all fall inside it, with
+    # headroom on both edges rather than exactly bracketing them.
+    wasserstein_loss_weight = trial.suggest_float('wasserstein_loss_weight', 1.0, 200.0, log=True)
+    # v13, new: kl_loss_weight/peak_loss_weight promoted from
+    # scripts/ablate_loss.py's manual-A/B/small-ablation-only status
+    # (STUDY_VERSION lossablation_v2 — see nn/training_loop.py's docstring)
+    # into the real search space, alongside wasserstein_loss_weight above —
+    # together these three assemble scripts/ablate_loss.py's 'combined'
+    # recipe (L = D_KL + lambda_1*W2 + lambda_2*L_peak, base_loss_weight=0
+    # — see this function's own base_loss_weight parameter), the only
+    # recipe out of 7 tested that beat the plain per-bin loss on EVERY
+    # wind-sea/swell metric (Peak_Height_RelError, Peak_Separation_Recall,
+    # Tm02_RMSE, Tm02_Bias) rather than trading one off against another.
+    # Ranges are exactly what that ablation validated (kl_loss_weight
+    # winner ~46, peak_loss_weight winner ~9-18 depending on phase) — no
+    # separate manual sweep beyond that ablation exists yet, so widen if
+    # v13 trials cluster at either edge (same convention as lr's docstring
+    # above).
+    kl_loss_weight = trial.suggest_float('kl_loss_weight', 0.1, 50.0, log=True)
+    peak_loss_weight = trial.suggest_float('peak_loss_weight', 0.01, 20.0, log=True)
 
     # Safety net: embed_dim must be divisible by nhead (guaranteed by construction
     # above, but kept to catch any future reparameterization changes).
@@ -665,7 +725,12 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
             model, train_loader, val_loader, device, freqs, freq_means, shape_means,
             target, lead_time, lr, weight_decay, objective_metric,
             num_epochs=100, patience=20, trial=trial,
-            wasserstein_loss_weight=wasserstein_loss_weight)
+            base_loss_weight=base_loss_weight,
+            kl_loss_weight=kl_loss_weight,
+            wasserstein_loss_weight=wasserstein_loss_weight,
+            peak_loss_weight=peak_loss_weight,
+            peak_max_count=4,  # fixed, not searched — see scripts/ablate_loss.py's MAX_PEAKS
+            compute_peak_metrics=compute_peak_metrics)
     except torch.OutOfMemoryError:
         # Drop references to this trial's model/optimizer/activations before
         # emptying the cache — otherwise the exception's traceback keeps the
@@ -687,9 +752,20 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
         except ValueError:
             current_best = float('-inf')
         if best_val_score > current_best:
+            # trial.params only holds what was actually sampled via
+            # trial.suggest_*, so when fixed_head_dim/fixed_nhead pin these
+            # instead of searching them, 'head_dim'/'nhead' are silently
+            # absent from it -- breaking nn.checkpoints.build_model (and
+            # everything built on it: scripts/compare_versions.py,
+            # scripts/infer.py), which reads embed_dim as
+            # params['head_dim'] * params['nhead'] unconditionally. Folding
+            # the actual (fixed-or-searched) values in here keeps 'params'
+            # a complete reconstruction recipe regardless of which path set
+            # them, matching every other checkpoint's shape.
+            saved_params = {**trial.params, 'head_dim': head_dim, 'nhead': nhead}
             torch.save({
                 'model_state_dict': best_model_state,
-                'params': trial.params,
+                'params': saved_params,
                 'target': target,
                 'lead_time_steps': lead_time,
                 'freq_means': freq_means,

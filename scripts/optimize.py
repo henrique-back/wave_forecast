@@ -147,14 +147,46 @@ set_seed(42)
 #     property. The blend uses a fixed constant weight
 #     (_FINAL_STEP_SS_WASSERSTEIN_BETA), not the trial's own
 #     wasserstein_loss_weight, to keep cross-trial comparison fair.
-STUDY_VERSION = "v12"
+#
+# v13: the composite-loss ablation (scripts/ablate_loss.py, STUDY_VERSION
+# lossablation_v2 — a small, fixed-architecture Optuna study, NOT this one)
+# tested 7 loss recipes against a wind-sea/swell-conditioned panel
+# (Peak_Height_RelError, Peak_Separation_Recall, Tm02_RMSE, Tm02_Bias, all
+# split by partition label) and found exactly one — base_loss_weight=0,
+# L = kl_loss_weight*D_KL + wasserstein_loss_weight*W2 + peak_loss_weight*
+# L_peak (the 'combined' phase) — that beat the plain per-bin loss on
+# EVERY one of those four metrics simultaneously; every other recipe
+# (KL alone, Wasserstein alone or +KL, Peak alone or +KL) traded at least
+# one of them away. Full results: results/lossablation_comparison_v2.md.
+# This version promotes that recipe from ablation-only into the real
+# search space:
+#   - kl_loss_weight, peak_loss_weight: NEW trial.suggest_float dimensions
+#     (see their own comments below) — previously manual-A/B/ablation-only
+#     (nn/training_loop.py's docstring).
+#   - wasserstein_loss_weight's range replaced wholesale (was 10-400, tuned
+#     under the OLD Wasserstein-1 metric before utils/loss.py's 2026-08-17
+#     W1->W2 switch — not comparable) with the range scripts/ablate_loss.py
+#     validated under the CURRENT W2 metric.
+#   - base_loss_weight=0.0 (literal substitute, not additive — see
+#     nn/training_loop.py's docstring) is passed as a FIXED constant below,
+#     not searched: which terms compose the loss is exactly what the
+#     ablation was for, not something to reopen here.
+#   - OBJECTIVE_METRIC switches to 'peak_fidelity_SS' (see its own comment
+#     below) — 'final_step_SS_wasserstein' is an RMSE transform, and
+#     training no longer optimizes RMSE at all (base_loss_weight=0), so it
+#     would reintroduce the same selection-metric/training-objective
+#     mismatch the ablation's own methodology (see nn/optimization.py::
+#     _compute_val_score's 'peak_fidelity_SS' docstring) was built to avoid.
+#   - n_startup_trials/n_trials bumped ~30% (15->20, 70->90) for the 3 new
+#     continuous dimensions (10->13 total) — see the comment near n_trials.
+STUDY_VERSION = "v13"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "shape_v12"
+EXPERIMENT_NAME = "shape_v13"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -185,18 +217,46 @@ EXPERIMENT_DESCRIPTION = (
     "instead of requiring the model to infer current wave-system dynamics "
     "implicitly. Both validated by a manual before/after comparison prior to "
     "being added to the search space — see STUDY_VERSION's v12 comment above."
+    "v13: promotes the KL/Wasserstein/Peak composite loss validated by "
+    "scripts/ablate_loss.py's small fixed-architecture ablation "
+    "(STUDY_VERSION lossablation_v2) into the real search space — "
+    "base_loss_weight=0 (literal substitute of the per-bin loss), "
+    "L = kl_loss_weight*D_KL + wasserstein_loss_weight*W2 + peak_loss_weight*"
+    "L_peak, all three now tunable. OBJECTIVE_METRIC switches to "
+    "peak_fidelity_SS accordingly — see STUDY_VERSION's v13 comment above "
+    "for the full rationale and results/lossablation_comparison_v2.md for "
+    "the ablation's own numbers."
 )
 
 # Set parameters
 lead_times_hours = [48]
 target = "shape"
-# With 10 tunable hyperparameters (4 categorical, 2 int, 4 continuous —
-# wasserstein_loss_weight added in v12), n_startup_trials=15 gives
-# multivariate TPE enough random samples to fit an
-# initial KDE without eating half the budget on pure random search (as
-# n_startup_trials=20 of n_trials=40 did previously); n_trials=80 leaves 65
-# trials for TPE to actually exploit that model, vs. only 20 before.
-n_trials = 70
+
+# v13, both new (target == 'shape' only — see FIXED_HEAD_DIM/FIXED_NHEAD
+# below): a cross-version tally of every completed shape-target study
+# sharing the current freq_embed_dropout/embed_dropout search-space shape
+# (shape_v10/v11's best_trial.txt + shape_v12's current_best.txt, 8
+# (study, lead_time) data points) found head_dim=32 and nhead=8 each
+# winning 6/8 — no other hyperparameter here showed comparable cross-
+# lead-time/cross-version agreement (seq_len/batch_size/dropouts/
+# weight_decay each span nearly their entire range with no consensus
+# value, and num_encoder_layers' superficially similar 5/8 for value 4
+# included a lead_time — shape_v10's 6h — picking a very different value,
+# suggesting real lead-time-dependent capacity need rather than noise).
+# Fixing these removes 2 of the 13 dimensions below (see n_startup_trials/
+# n_trials); pass fixed_head_dim=None/fixed_nhead=None to nn.objective
+# instead to go back to searching them.
+FIXED_HEAD_DIM = 32
+FIXED_NHEAD = 8
+
+# With 11 tunable hyperparameters (2 categorical — seq_len/batch_size,
+# head_dim/nhead pinned above — 2 int, 7 continuous: kl_loss_weight/
+# peak_loss_weight added in v13 alongside the existing wasserstein_loss_
+# weight), n_startup_trials=18 gives multivariate TPE enough random samples
+# to fit an initial KDE without eating too much of the budget on pure
+# random search; n_trials=80 leaves 62 trials for TPE to actually exploit
+# that model.
+n_trials = 80
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
 #   'density' : spectral density only
@@ -252,7 +312,28 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 #                       wasserstein_loss_weight (see that constant's comment
 #                       for why using the tunable per-trial weight here would
 #                       corrupt cross-trial comparison).
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "final_step_SS_wasserstein"
+#   'peak_fidelity_SS'  recall - rel_err, where rel_err/recall are each the
+#                       mean of Peak_Height_RelError/Peak_Separation_Recall
+#                       across wind-sea and swell partitions (utils/
+#                       spectral_peaks.py::peak_modality_metrics) — NOT an
+#                       RMSE transform, unlike every metric above. v13's
+#                       choice (target=='shape' only): training no longer
+#                       optimizes RMSE at all once base_loss_weight=0 (see
+#                       STUDY_VERSION's v13 comment), so 'final_step_SS'/
+#                       'final_step_SS_wasserstein' would pick epochs/trials
+#                       by a criterion adversarial to what's actually being
+#                       trained for — see nn/optimization.py::
+#                       _compute_val_score's docstring for the full
+#                       argument. Requires compute_peak_metrics=True (see
+#                       COMPUTE_PEAK_METRICS below).
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity_SS"
+
+# v13, both new: assemble scripts/ablate_loss.py's validated 'combined'
+# recipe (see STUDY_VERSION's v13 comment) — target=='shape' only, since
+# that's the ablation's entire validated scope; base_loss_weight=1.0 (the
+# per-bin loss trains normally, unaffected) for every other target.
+BASE_LOSS_WEIGHT = 0.0 if target == "shape" else 1.0
+COMPUTE_PEAK_METRICS = (target == "shape")
 
 # Process data
 BUOY_ID = "32012"
@@ -287,6 +368,9 @@ if not _meta_path.exists():
         f"- **OBJECTIVE_METRIC**: {OBJECTIVE_METRIC}\n"
         f"- **CHANNEL_SET**: {CHANNEL_SET}\n"
         f"- **AUX_SET**: {AUX_SET}\n"
+        f"- **BASE_LOSS_WEIGHT**: {BASE_LOSS_WEIGHT}\n"
+        f"- **FIXED_HEAD_DIM / FIXED_NHEAD**: {FIXED_HEAD_DIM} / {FIXED_NHEAD} "
+        f"(shape target only; see STUDY_VERSION's v13 comment for the tally)\n"
         f"- **Architecture**: (fill in manually)\n"
     )
 
@@ -353,11 +437,15 @@ for lead_time_hours in lead_times_hours:
         target=target,
         objective_metric=OBJECTIVE_METRIC,
         results_folder=results_folder,
+        base_loss_weight=BASE_LOSS_WEIGHT,
+        compute_peak_metrics=COMPUTE_PEAK_METRICS,
+        fixed_head_dim=FIXED_HEAD_DIM if target == "shape" else None,
+        fixed_nhead=FIXED_NHEAD if target == "shape" else None,
     )
 
     # Run optuna
     sampler = optuna.samplers.TPESampler(
-        n_startup_trials=15, multivariate=True, seed=42
+        n_startup_trials=18, multivariate=True, seed=42
     )
     # 30-step warmup avoids the over-pruning seen at exactly epoch 20 in earlier
     # studies (54% of 12h trials pruned at the boundary with n_warmup_steps=20).
