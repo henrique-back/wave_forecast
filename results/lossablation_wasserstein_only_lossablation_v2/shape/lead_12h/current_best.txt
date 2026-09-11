@@ -1,0 +1,2 @@
+Best value: 0.4631294041189403
+Best params: {'wasserstein_loss_weight': 9.462186336363652}

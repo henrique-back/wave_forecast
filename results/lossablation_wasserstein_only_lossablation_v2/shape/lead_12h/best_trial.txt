@@ -1,0 +1,21 @@
+Phase: wasserstein_only
+Lead time (hours): 12
+Best trial parameters:
+{'wasserstein_loss_weight': 9.462186336363652}
+val_Bias: 0.027702052146196365
+val_CC: 0.8899334073066711
+val_Hs_MAPE: None
+val_Peak_Height_RelError_swell: 0.4084527790546417
+val_Peak_Height_RelError_windsea: 0.3819800317287445
+val_Peak_Separation_Recall_swell: 0.8816813700051894
+val_Peak_Separation_Recall_windsea: 0.8316591617596121
+val_Peak_swell_n: 3854
+val_Peak_windsea_n: 5774
+val_R2: 0.7916849851608276
+val_RMSE: 1.920073390007019
+val_Shape_Mass_Error: 4.27434679295402e-06
+val_Shape_RMSE: 2.5666098594665527
+val_Shape_SS: -0.022352810678141877
+val_Tm02_RMSE_swell: 0.5554931403977541
+val_Tm02_RMSE_windsea: 0.12436262814987575
+val_overall_SS: -0.34779272094965386
