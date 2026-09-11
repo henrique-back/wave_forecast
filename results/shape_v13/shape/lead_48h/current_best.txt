@@ -1,0 +1,2 @@
+Best value: 0.4779675008369962
+Best params: {'seq_len': 12, 'batch_size': 64, 'lr': 0.008158812228791562, 'freq_embed_dropout': 0.2878997883128378, 'embed_dropout': 0.26844820512829465, 'num_encoder_layers': 3, 'num_decoder_layers': 4, 'weight_decay': 2.259279742015697e-06, 'wasserstein_loss_weight': 2.8246357083904887, 'kl_loss_weight': 0.1324546154600188, 'peak_loss_weight': 0.1185564483167081}

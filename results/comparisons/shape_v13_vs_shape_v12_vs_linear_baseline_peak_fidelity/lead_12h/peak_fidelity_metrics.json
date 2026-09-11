@@ -1,0 +1,35 @@
+{
+  "shape_v13": {
+    "peak_fidelity_SS": 0.5592573386985051,
+    "peak_fidelity_SS_persistence": 0.4326193047040796,
+    "Peak_Height_RelError_windsea": 0.352668434381485,
+    "Peak_Height_RelError_swell": 0.4278651177883148,
+    "Peak_Separation_Recall_windsea": 0.9305675597810429,
+    "Peak_Separation_Recall_swell": 0.9684806697857671,
+    "Shape_RMSE": 2.765573501586914,
+    "Shape_SS": -0.10337084081063641,
+    "seq_len": 12
+  },
+  "shape_v12": {
+    "peak_fidelity_SS": 0.10427502124365123,
+    "peak_fidelity_SS_persistence": 0.4326193047040796,
+    "Peak_Height_RelError_windsea": 0.2808261811733246,
+    "Peak_Height_RelError_swell": 0.42681577801704407,
+    "Peak_Separation_Recall_windsea": 0.34687409968308847,
+    "Peak_Separation_Recall_swell": 0.5693179019945827,
+    "Shape_RMSE": 2.2027487754821777,
+    "Shape_SS": 0.12117730116239755,
+    "seq_len": 12
+  },
+  "linear_baseline": {
+    "peak_fidelity_SS": 0.42823736470098134,
+    "peak_fidelity_SS_persistence": 0.4326927926335602,
+    "Peak_Height_RelError_windsea": 0.3360339777723573,
+    "Peak_Height_RelError_swell": 0.3393585214522174,
+    "Peak_Separation_Recall_windsea": 0.6931735126443502,
+    "Peak_Separation_Recall_swell": 0.838693715982187,
+    "Shape_RMSE": 2.1774024963378906,
+    "Shape_SS": 0.13356282258881635,
+    "seq_len": 48
+  }
+}
