@@ -228,8 +228,16 @@ EXPERIMENT_DESCRIPTION = (
     "the ablation's own numbers."
 )
 
+import argparse
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--lead", type=int, default=None, choices=[6, 12, 24, 48],
+                      help="Run a single lead time (for one-lead-per-Slurm-job "
+                           "submission, e.g. slurm/optimize_v13_lead*.slurm) instead "
+                           "of looping over lead_times_hours in one process.")
+_args, _ = _parser.parse_known_args()
+
 # Set parameters
-lead_times_hours = [48]
+lead_times_hours = [_args.lead] if _args.lead is not None else [12, 24, 48]
 target = "shape"
 
 # v13, both new (target == 'shape' only — see FIXED_HEAD_DIM/FIXED_NHEAD
@@ -255,7 +263,8 @@ FIXED_NHEAD = 8
 # weight), n_startup_trials=18 gives multivariate TPE enough random samples
 # to fit an initial KDE without eating too much of the budget on pure
 # random search; n_trials=80 leaves 62 trials for TPE to actually exploit
-# that model.
+# that model. Each of the 3 lead times (--lead) runs this same budget as
+# its own Slurm job — three ~80-trial studies, not one.
 n_trials = 80
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
