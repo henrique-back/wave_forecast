@@ -1,17 +1,17 @@
-\documentclass[11pt,a4paper]{article}
+%% Ocean Engineering submission, elsarticle class with author-year (Harvard) citation
+%% style per manuscript/journal/author_guidelines.md. Reference implementation:
+%% manuscript/journal/elsarticle/elsarticle-template-harv.tex
+\documentclass[preprint,12pt,authoryear]{elsarticle}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb}
-\usepackage{geometry}
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{booktabs}
 \usepackage{enumitem}
 \usepackage{xcolor}
-\usepackage{natbib}
 
-\geometry{margin=2.7cm}
 \hypersetup{
     colorlinks=true,
     linkcolor=blue!50!black,
@@ -19,25 +19,92 @@
     urlcolor=blue!50!black
 }
 
-\title{% TODO: manuscript title
-}
-\author{% TODO: author list
-}
-\date{\today}
+\journal{Ocean Engineering}
 
 \begin{document}
-\maketitle
+
+\begin{frontmatter}
+
+\title{% TODO: manuscript title
+}
+
+%% \author[label1]{Name\corref{cor1}}
+%% \ead{email@address}
+%% \cortext[cor1]{Corresponding author}
+%% \affiliation[label1]{organization={},
+%%             addressline={},
+%%             city={},
+%%             postcode={},
+%%             state={},
+%%             country={}}
+\author{% TODO: author list
+}
+
+\affiliation{organization={Institute of Mathematics and Statistics, Federal University of Rio Grande do Sul (UFRGS)},
+            addressline={},%TODO: street address
+            city={},%TODO
+            postcode={},%TODO
+            state={},%TODO
+            country={}}%TODO
 
 \begin{abstract}
-% TODO: abstract
+% TODO: abstract (<=200 words; purpose, methods, main findings, principal conclusions; no citations)
 \end{abstract}
 
-\input{introduction_section}
-\input{methods_section}
-\input{results_section}
-\input{discussion_section}
+\begin{highlights}
+\item % TODO: highlight 1 (<=85 characters)
+\item % TODO: highlight 2 (<=85 characters)
+\item % TODO: highlight 3 (<=85 characters)
+\end{highlights}
 
-\bibliographystyle{plainnat}
-\bibliography{references}
+\begin{keyword}
+% TODO: 1--7 keywords, English, single words preferred, separated by \sep
+\end{keyword}
+
+\end{frontmatter}
+
+%% main text
+
+\input{sections/01_introduction}
+\input{sections/02_methods}
+\input{sections/03_results}
+\input{sections/04_discussion}
+
+%% \appendix
+%% \section{}
+%% \label{app:}
+
+\section*{CRediT authorship contribution statement}
+% TODO: CRediT roles per author (Conceptualization, Data curation, Formal analysis,
+% Funding acquisition, Investigation, Methodology, Project administration, Resources,
+% Software, Supervision, Validation, Visualization, Writing -- original draft,
+% Writing -- review \& editing)
+
+\section*{Declaration of competing interest}
+% TODO: "The authors declare that they have no known competing financial interests..."
+% or disclose them.
+
+\section*{Funding}
+% TODO: funding statement, or "This research did not receive any specific grant
+% from funding agencies in the public, commercial, or not-for-profit sectors."
+
+\section*{Data availability}
+% TODO: repository name + link/DOI for deposited data (Option C), or a statement
+% of why the data cannot be shared.
+
+%% Only include if generative AI tools were used beyond grammar/spelling/reference
+%% checking; omit the section entirely otherwise.
+%% \section*{Declaration of generative AI and AI-assisted technologies in the
+%% manuscript preparation process}
+%% During the preparation of this work the author(s) used [TOOL] in order to
+%% [REASON]. After using this tool/service, the author(s) reviewed and edited the
+%% content as needed and take(s) full responsibility for the content of the
+%% published article.
+
+\section*{Acknowledgements}
+% TODO: acknowledgements (must remain the last section before the bibliography)
+
+\bibliographystyle{journal/elsarticle/elsarticle-harv}
+\bibliography{literature/refs}
 
 \end{document}
