@@ -1,0 +1,43 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{natbib}
+
+\geometry{margin=2.7cm}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    citecolor=blue!50!black,
+    urlcolor=blue!50!black
+}
+
+\title{% TODO: manuscript title
+}
+\author{% TODO: author list
+}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+% TODO: abstract
+\end{abstract}
+
+\input{introduction_section}
+\input{methods_section}
+\input{results_section}
+\input{discussion_section}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
