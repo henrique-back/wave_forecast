@@ -596,11 +596,8 @@ def main():
         if spec['name'] == 'linear_baseline':
             spec['color'] = COLOR_LINEAR
 
-    # Must match the buoy every checkpoint-producing script (scripts/train.py,
-    # scripts/optimize.py, scripts/infer.py, scripts/train_linear_baseline.py)
-    # actually trains on — a prior commit had silently drifted this to '42056'
-    # with no comment/rationale, which meant every comparison here was scored
-    # against the wrong buoy's data.
+    # Must match the buoy every checkpoint-producing script actually trains
+    # on — see manuscript/decisions/log/017 (this drifted silently once).
     density, alpha_1, alpha_2, r_1, r_2, wind = pd.read_pickle(project_root / 'buoy_data' / '32012' / 'processed_data.pkl')
     freqs = get_freqs(density)
     freqs_np = freqs.cpu().numpy() if torch.is_tensor(freqs) else np.asarray(freqs)

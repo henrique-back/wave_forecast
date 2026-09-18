@@ -5,7 +5,7 @@ This module answers a different question: does the transformer beat a plain
 *linear* extrapolator of each frequency bin's own history? A model that only
 narrowly beats this baseline is not obviously exploiting nonlinear structure.
 
-Design (see CLAUDE.md discussion / plan for the full rationale):
+Design rationale: see manuscript/decisions/log/007.
 - Recursive AR rollout: fit a one-step-ahead linear model, then feed its own
   prediction back as the newest lag for the next step, `lead_time` times —
   mirroring model.infer()'s autoregressive loop and the persistence

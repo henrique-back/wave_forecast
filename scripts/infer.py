@@ -10,9 +10,7 @@ plots predicted vs true vs persistence.
 --target combined loads a separate 'hs' checkpoint and 'shape' checkpoint
 (same experiment/lead) and recombines them into a physical spectrum:
     E_pred(f, t) = shape_pred(f, t) * m0_pred(t),  m0_pred = (Hs_pred / 4)^2
-This is the shape/magnitude model split described in CLAUDE.md — see the
-project discussion of why a single density-target model tends to
-underestimate spectral peaks and over-smooth the high-frequency tail.
+See manuscript/decisions/log/003 for the rationale behind this split.
 
 --save-metrics additionally runs a full pass over the ENTIRE test set (not
 just the inspected samples) and writes the resulting metrics into
@@ -479,7 +477,7 @@ def run_single(
             elif args.target == "shape":
                 # y_pred/persistence are log-shape; y_true is the raw
                 # dataset ground truth (already physical unit-area shape,
-                # per prepare_y — unaffected by the ablation).
+                # per prepare_y).
                 pred_shape = np.exp(y_pred.cpu().numpy()[0])
                 true_shape = y_true.cpu().numpy()[0]
                 pers_shape = np.exp(persistence.cpu().numpy()[0])
@@ -492,8 +490,7 @@ def run_single(
                     idx, freqs_np, steps, pred_shape, true_shape, pers_shape
                 )
                 # Frequency-weighted (trapezoidal), matching the training
-                # loss/nn.evaluate.py convention since the v7->v8 bump —
-                # not a flat mean over the log-spaced frequency grid.
+                # loss/nn.evaluate.py convention — see manuscript/decisions/log/010.
                 freq_w = trapz_weights(freqs_np)
                 shape_rmse_per_step = np.sqrt(
                     (((pred_shape - true_shape) ** 2) * freq_w).sum(axis=1)
@@ -691,10 +688,9 @@ def run_combined(
             tm02_pred, tm02_true = tm02_pred[0], tm02_true[0]
 
             # Sanity check: model.infer() renormalizes each predicted shape
-            # step to unit area, so this should print ~1.000 for every step.
-            # A drift here would mean the renormalization in
-            # nn/transformer.py::infer() isn't being hit (e.g. a stale
-            # checkpoint loaded against new code).
+            # step to unit area, so this should print ~1.000 every step —
+            # a drift means the renormalization in nn/transformer.py::infer()
+            # isn't being hit (e.g. a stale checkpoint loaded against new code).
             shape_m0 = np.trapezoid(shape_pred_np, freqs_np, axis=1)
             print(f"\nSample t0={t0} (idx_hs={idx_hs}, idx_shape={idx_shape}):")
             print(

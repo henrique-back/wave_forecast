@@ -16,12 +16,10 @@ def require_slurm(script_name):
 
     Checks for SLURM_JOB_ID — set by slurmd for every job step regardless
     of partition/qos/node, so this doesn't need to know anything about
-    wavetank/netuno's specific configuration.
-
-    Escape hatch: set WAVE_FORECAST_ALLOW_NO_SLURM=1 for a deliberate
-    direct run (a short CPU-only smoke test, local debugging with a tiny
-    n_trials/num_epochs, etc.) — prints a warning and continues instead of
-    exiting.
+    wavetank/netuno's specific configuration. Escape hatch:
+    WAVE_FORECAST_ALLOW_NO_SLURM=1 prints a warning and continues instead
+    of exiting, for a deliberate direct run (e.g. a short CPU-only smoke
+    test).
     """
     if "SLURM_JOB_ID" in os.environ:
         return

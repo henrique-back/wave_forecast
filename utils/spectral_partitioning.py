@@ -242,14 +242,14 @@ def find_peak_windows(
     that peak passed criterion 2.
 
     Not differentiable, not batched — like find_significant_peaks, this
-    calls scipy.signal.find_peaks and loops in Python over a single 1-D
-    spectrum. Call this ONCE per sample at data-preparation time (see
-    nn/optimization.py::_prepare_dataloaders' freq_means/shape_means
-    precedent for precompute-once-per-run tensors), never inside the
-    training hot path — utils.loss.SoftPeakHeightLoss.forward expects
-    left_idx/right_idx already computed, exactly as
-    nn/evaluate.py:53-60 documents peak-detection being opt-in/
-    evaluation-only for the same performance reason.
+    loops in Python over a single 1-D spectrum via scipy.signal.find_peaks.
+    utils.loss.SoftPeakHeightLoss.forward expects left_idx/right_idx already
+    computed rather than deriving them itself. The ideal call site is once
+    per sample at data-preparation time (mirroring how freq_means/
+    shape_means are computed once in nn/optimization.py::
+    _prepare_dataloaders); the current training loop instead recomputes
+    windows per batch as a deliberate, provisional trade-off — see
+    manuscript/decisions/log/025.
 
     Parameters
     ----------

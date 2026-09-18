@@ -14,7 +14,6 @@ def read_txt(filepath):
     with open(filepath, 'r') as f:
         lines = f.readlines()
 
-    # Find the first commented line
     for idx, line in enumerate(lines):
         if line.startswith('#'):
             header_line = line.lstrip('#').strip()
@@ -24,7 +23,6 @@ def read_txt(filepath):
     else:
         raise ValueError("No commented header line starting with '#' found.")
 
-    # Load data using parsed column names
     df = pd.read_csv(
         filepath,
         sep='\s+',

@@ -41,10 +41,8 @@ def _log_freq_sinusoidal_encoding(freqs: torch.Tensor, freq_embed_dim: int) -> t
 class _FreqAttentionPool(nn.Module):
     """Single learned query attends over the frequency-bin axis to produce one summary token.
 
-    Content-aware alternative to flatten+Linear: the softmax weighting adapts
-    to where the spectral peak actually sits on a given timestep, rather than
-    applying a fixed per-bin-position weight learned once at training time.
-    Parameter count depends only on freq_embed_dim, not num_freqs.
+    Parameter count depends only on freq_embed_dim, not num_freqs. See
+    manuscript/decisions/log/006 for why this replaced a flatten+Linear pool.
     """
 
     def __init__(self, freq_embed_dim: int, embed_dim: int):
@@ -64,21 +62,19 @@ class _FreqAttentionPool(nn.Module):
 class FreqDimEmbedding(nn.Module):
     """Structured encoder embedding that respects the (num_freqs, num_channels) layout.
 
-    Pipeline per timestep:
+    Pipeline per timestep (see manuscript/decisions/log/002 and 006 for why
+    this replaced a flat Linear embedding + flatten pool):
       1. A shared linear maps the per-bin channel measurement into a per-bin
          representation (same weights for every bin).
       2. A frequency-identity signal is added to each bin's representation: a
          fixed sinusoidal encoding of its actual (log) frequency value, plus a
          learned per-bin residual (zero-initialised, so training starts from
-         the pure sinusoidal signal and only learns corrections the physical
-         grid alone doesn't capture).
+         the pure sinusoidal signal).
       3. A dilated-conv frontend (reusing TemporalConvFrontend along the
-         frequency axis instead of time) lets each bin's representation
-         absorb local context from its neighbours, exploiting that a wave
-         spectrum is a smooth curve in frequency.
+         frequency axis instead of time) lets each bin absorb local context
+         from its neighbours.
       4. A single-query attention pool collapses all bins into one embed_dim
-         token, weighting bins by their actual content instead of a fixed
-         per-position weight.
+         token.
 
     Args:
         num_freqs       : number of frequency bins (e.g. 47)
@@ -95,7 +91,6 @@ class FreqDimEmbedding(nn.Module):
                  freq_embed_dim: int, embed_dim: int,
                  freqs: torch.Tensor, dropout: float = 0.1):
         super().__init__()
-        # Shared across all frequency bins: maps per-bin measurement → freq_embed_dim
         self.freq_proj = nn.Linear(num_channels, freq_embed_dim)
         self.act = nn.GELU()
 
@@ -105,11 +100,10 @@ class FreqDimEmbedding(nn.Module):
         )
         self.freq_pos_residual = nn.Parameter(torch.zeros(num_freqs, freq_embed_dim))
 
-        # 'replicate' padding: the frequency axis is bounded and non-cyclic,
-        # so edge bins should repeat their real value instead of the zero
-        # padding TemporalConvFrontend defaults to for the time axis — zero
-        # padding here would fabricate fake zero-energy bins just outside the
-        # 0.02-0.485 Hz grid and corrupt the ~7 bins nearest each edge.
+        # 'replicate' padding, not TemporalConvFrontend's time-axis default of
+        # 'zeros': the frequency axis is bounded and non-cyclic, so edge bins
+        # repeat their real value instead of fabricating zero energy just
+        # outside the 0.02-0.485 Hz grid. See manuscript/decisions/log/011.
         self.freq_conv = TemporalConvFrontend(freq_embed_dim, dropout=dropout,
                                               padding_mode='replicate')
         self.attn_pool = _FreqAttentionPool(freq_embed_dim, embed_dim)
@@ -122,7 +116,6 @@ class FreqDimEmbedding(nn.Module):
             (batch, seq_len, embed_dim)
         """
         b, t, f, c = x.shape
-        # Apply shared freq_proj to each (freq_bin, channel) slice
         x = x.reshape(b * t, f, c)                  # (b*t, num_freqs, num_channels)
         x = self.act(self.freq_proj(x))             # (b*t, num_freqs, freq_embed_dim)
         x = x + self.freq_pos_sinusoidal + self.freq_pos_residual

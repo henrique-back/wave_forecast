@@ -14,17 +14,12 @@ a typical case rather than a cherry-picked best/worst one.
 
 For each of the two samples, plots the PDF (E(f) or shape(f), depending on
 --target) on top and the CDF on the bottom, with the area between the true
-and predicted CDFs shaded. As of the 2026-08-17 W1->W2 update
-(SpectralWassersteinLoss now computes Wasserstein-2, see its docstring),
-that shaded area is no longer literally equal to the metric actually
-trained/reported elsewhere in this project — W1's ∫|CDF_pred-CDF_true|df
-has an exact shaded-area picture, but W2's quantile-domain formula doesn't.
-This plot keeps the CDF shading (still a correct, intuitive picture of W1
-specifically, and a reasonable proxy for "how much distributional mismatch
-there is") but labels it honestly as W1, and separately reports the actual
-W2 value (used elsewhere for training/evaluation, and for picking which
-sample is "representative" below) alongside it — see plot_sample's
-docstring.
+and predicted CDFs shaded. SpectralWassersteinLoss computes Wasserstein-2
+(see manuscript/decisions/log/024), whose quantile-domain formula has no
+exact shaded-area picture, so the shading here is a separately-computed
+Wasserstein-1 value, labeled honestly as W1; the actual W2 value (used
+elsewhere for training/evaluation, and for picking the "representative"
+sample below) is reported alongside it — see plot_sample's docstring.
 
 Usage:
     python scripts/plot_cdf_wasserstein.py --experiment shape_v12 --lead 12
@@ -117,9 +112,8 @@ def pick_representative(mask, w2_all, override_index):
 def plot_sample(ax_pdf, ax_cdf, freqs_np, true_s, pred_s, pers_s, n_peaks, w2_pred, w2_pers, ylabel):
     """w2_pred/w2_pers are the actual SpectralWassersteinLoss (W2) values for
     this sample — used only for the title text the caller builds, not
-    recomputed here. The shaded CDF area plotted below is a SEPARATE,
-    locally-computed W1 (∫|CDF_pred-CDF_true|df) — see module docstring for
-    why W1, not W2, is what the shaded area can honestly claim to equal."""
+    recomputed here. The shaded CDF area plotted below is a separately
+    computed W1 (∫|CDF_pred-CDF_true|df) — see module docstring for why."""
     cdf_true = compute_cdf(true_s, freqs_np)
     cdf_pred = compute_cdf(pred_s, freqs_np)
     cdf_pers = compute_cdf(pers_s, freqs_np)
@@ -194,11 +188,10 @@ def main():
     pred_np = np.exp(y_pred_step.numpy())
     pers_np = np.exp(y_pers_step.numpy())
 
-    # W2 (Wasserstein-2, as of 2026-08-17 — see SpectralWassersteinLoss's
-    # docstring) — the actual metric trained/reported elsewhere in this
-    # project. Used below to pick each bucket's median-error representative
-    # sample and reported in the plot titles; the CDF shading itself plots
-    # a separately-computed W1 (see plot_sample).
+    # W2 (Wasserstein-2 — see manuscript/decisions/log/024) is the actual
+    # metric trained/reported elsewhere; used below to pick each bucket's
+    # median-error representative sample and reported in the plot titles.
+    # The CDF shading itself plots a separately-computed W1 (see plot_sample).
     wasserstein_fn = SpectralWassersteinLoss()
     w2_pred_all = wasserstein_fn(y_pred_step, y_true_step, freqs, reduction="none").numpy()
     w2_pers_all = wasserstein_fn(y_pers_step, y_true_step, freqs, reduction="none").numpy()

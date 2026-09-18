@@ -4,10 +4,8 @@ import ast
 import re
 import matplotlib.pyplot as plt
 
-# Path to results folder
 base_results_folder = os.path.join(os.path.dirname(__file__), '..', 'results')
 
-# Regexes to extract deltat and lead time from folder names
 deltat_pattern = re.compile(r'deltat_(\d+)')
 lead_pattern = re.compile(r'lead_(\d+)h')
 

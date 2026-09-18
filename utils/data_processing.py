@@ -15,11 +15,10 @@ _CIRCULAR_DEGREE_KEYS = {'alpha_1', 'alpha_2'}
 def _interpolate_circular_degrees(df, full_index):
     """Time-interpolate a DataFrame of angles (degrees, circular) per column.
 
-    Same wraparound problem as WDIR in process_wind(): linearly interpolating
-    a raw angle across a gap (e.g. 350deg -> 10deg) passes through 180deg
-    instead of through 0deg. Decomposing into sin/cos, interpolating those,
-    and recombining via atan2 keeps the interpolation on the correct (short)
-    arc, per frequency bin.
+    Linearly interpolating a raw angle across a gap (e.g. 350deg -> 10deg)
+    passes through 180deg instead of through 0deg. Decomposing into sin/cos,
+    interpolating those, and recombining via atan2 keeps the interpolation
+    on the correct (short) arc, per frequency bin.
     """
     theta = np.radians(df)
     sin_part = np.sin(theta).reindex(full_index).interpolate(method='time', limit_direction='both')
@@ -31,12 +30,11 @@ def process_wind(folder_path, filename='wind.txt'):
     """
     Reads a buoy NDBC stdmet .txt file and derives wind_u/wind_v.
 
-    WDIR (degrees, direction wind is coming FROM) is circular — linearly
-    time-interpolating the raw angle across a data gap (e.g. 350deg -> 10deg)
-    would pass through 180deg and produce a wrong intermediate direction.
-    u/v components are computed here, BEFORE any time-reindexing/interpolation
-    happens in data_processing(), so that step interpolates two continuous
-    scalars instead of a wrapping angle.
+    WDIR (degrees, direction wind is coming FROM) is circular, so u/v
+    components are computed here, BEFORE any time-reindexing/interpolation
+    happens in data_processing() — interpolating the raw angle across a gap
+    would pass through the wrong side of the compass (see
+    manuscript/decisions/log/004).
 
     Returns:
         pd.DataFrame with columns ['wind_u', 'wind_v'], datetime-indexed,
@@ -104,7 +102,6 @@ def data_processing(folder_path, save_path=None):
     # but shares the same reindex/interpolate/check_time treatment below.
     data['wind'] = process_wind(folder_path)
 
-    # Create shared full hourly index
     start = min(df.index.min() for df in data.values())
     end = max(df.index.max() for df in data.values())
     full_index = pd.date_range(start=start, end=end, freq='h')
@@ -115,13 +112,11 @@ def data_processing(folder_path, save_path=None):
         for key, df in data.items()
     ]
 
-    # Check time consistency
     ok, msg = check_time(*dfs_interpolated)
     print(msg)
     if not ok:
         raise ValueError("Time check failed.")
 
-    # Save to file if path provided
     if save_path is not None:
         pd.to_pickle(tuple(dfs_interpolated), save_path)
         print(f"Preprocessed data saved to {save_path}")

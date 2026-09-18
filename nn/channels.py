@@ -14,29 +14,27 @@ Two independent axes select the model's encoder input:
 
 CHANNEL_SETS = {
     'density': ['density'],
-    # alpha_1/alpha_2 are circular (mean/principal wave direction, degrees) —
-    # fed as sin/cos pairs rather than the raw angle so that e.g. 1deg and
-    # 359deg are adjacent to the model instead of maximally far apart.
+    # alpha_1/alpha_2 (mean/principal wave direction, degrees) are circular,
+    # so they're fed as sin/cos pairs rather than the raw angle — otherwise
+    # 1deg and 359deg would appear maximally far apart to the model.
     'full':    ['density', 'alpha_1_sin', 'alpha_1_cos', 'alpha_2_sin', 'alpha_2_cos', 'r_1', 'r_2'],
 }
 
 NORM_MODES = {
     'density':     'scale',  # non-negativity required for compute_hs / sqrt
-    'alpha_1_sin': 'none',   # already in [-1, 1]; z-scoring would just distort a valid unit circle
+    'alpha_1_sin': 'none',   # already in [-1, 1]; z-scoring would distort a valid unit circle
     'alpha_1_cos': 'none',
     'alpha_2_sin': 'none',
     'alpha_2_cos': 'none',
     'r_1':         'zscore',
-    'r_2':         'zscore',  # same rationale as r_1 — no physical non-negativity constraint
+    'r_2':         'zscore',
 }
 
-# DMD (Dynamic Mode Decomposition) columns are computed ONCE per sample from
-# that sample's own seq_len window of density history (nn/prepare_dmd.py),
-# not per-timestep like wind — but broadcast across seq_len before reaching
-# here, so they still fit prepare_aux's (samples, seq_len, channels) contract.
-# Column count MUST stay in sync with nn.prepare_dmd.DEFAULT_N_MODES (4
-# modes x 3 features/mode = 12) — same tight-coupling convention as
-# utils/loss.py::_FULL_CHANNELS.
+# Computed once per sample from that sample's own history (nn/prepare_dmd.py),
+# then broadcast across seq_len to fit prepare_aux's (samples, seq_len,
+# channels) contract — see manuscript/decisions/log/019. Column count must
+# stay in sync with nn.prepare_dmd.DEFAULT_N_MODES (4 modes x 3 features/mode
+# = 12), same tight-coupling convention as utils/loss.py::_FULL_CHANNELS.
 _DMD_COLUMNS = [
     f'dmd_mode{k}_{feat}' for k in range(4) for feat in ('growth', 'freq', 'amp')
 ]

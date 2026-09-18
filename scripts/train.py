@@ -41,8 +41,6 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
-# v9: matches optimize.py's STUDY_VERSION bump for the freq-axis conv
-# padding fix — run optimize.py first to produce shape_v9's best_trial.txt.
 EXPERIMENT_NAME = "shape_v12"
 BUOY_ID = "32012"
 
@@ -227,20 +225,15 @@ def main():
                 num_epochs=NUM_EPOCHS,
                 patience=PATIENCE,
                 trial=None,
-                # Now a tuned hyperparameter (nn/optimization.py::objective,
-                # optimize.py v12+) rather than a manually-set constant, so
-                # it's read from best_trial.txt like every other param.
                 # .get(..., 0.0) falls back to the pre-v12 no-op behavior for
-                # older best_trial.txt files that predate this hyperparameter.
+                # older best_trial.txt files that predate this hyperparameter
+                # (see manuscript/decisions/log/020).
                 wasserstein_loss_weight=params.get("wasserstein_loss_weight", 0.0),
                 # Not yet in objective()'s search space (see
-                # nn/optimization.py::_train_model's docstring) — best_trial.txt
-                # will never actually contain this key until a Stage 2
-                # promotion, so .get(..., 0.0) is a no-op here today. Kept for
-                # forward-compatibility with the same convention
-                # wasserstein_loss_weight uses, and so a manually-edited
-                # best_trial.txt (or a direct _train_model(...) call bypassing
-                # this script) can already override it for a Stage 1 A/B sweep.
+                # nn/optimization.py::_train_model's docstring), so
+                # .get(..., 0.0) is currently a no-op — kept so a manually
+                # edited best_trial.txt (or a direct _train_model() call
+                # bypassing this script) can already override it.
                 kl_loss_weight=params.get("kl_loss_weight", 0.0),
             )
 

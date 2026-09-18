@@ -98,13 +98,10 @@ def main():
             continue
 
         print(f"[{phase}] loading checkpoint and evaluating on the test set...")
-        # map_location='cpu' (not `device`) -- matches nn/checkpoints.py's/
-        # scripts/compare_versions.py's own convention, and is required
-        # here specifically: FreqDimEmbedding.__init__ computes a fixed
-        # sinusoidal buffer from `freqs` at CONSTRUCTION time (before
-        # .to(device) below runs), against newly-created CPU tensors of its
-        # own -- a CUDA-resident freqs at that point is a cross-device
-        # RuntimeError, not a places-things-on-the-wrong-device-later bug.
+        # map_location='cpu' is required, not stylistic: FreqDimEmbedding
+        # builds a fixed sinusoidal buffer from `freqs` at construction time,
+        # before .to(device) below runs — loading straight to CUDA/MPS raises
+        # a cross-device error there.
         ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
 
         model = WaveHeightBaselineNN(

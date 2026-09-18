@@ -23,162 +23,10 @@ print("Current working directory:", os.getcwd())
 set_seed(42)
 
 # Bump this when objective definition, hyperparameter space, or training logic
-# changes in a way that makes old trials incomparable.  A new version creates
+# changes in a way that makes old trials incomparable. A new version creates
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
-# surrogate model.
-#
-# Bumped v7 -> v8: RMSE (both the training loss for 'density'/'shape'
-# targets, RMSELoss in utils/loss.py, and the RMSE/CC/Bias/R2/SS family in
-# nn/evaluate.py + nn/spectrum_eval.py) is now frequency-weighted via
-# utils.trapz_weights instead of a flat mean over the log-spaced frequency
-# grid. This changes both what the model optimizes for and how trials are
-# scored, so v7 trials are not comparable to v8 trials.
-#
-# v9: FreqDimEmbedding's frequency-axis conv (nn/freq_embedding.py's
-# freq_conv, reusing TemporalConvFrontend) switched from zero-padding to
-# replicate-padding at the grid boundary. Zero-padding fabricated fake
-# zero-energy bins just outside 0.02-0.485 Hz and corrupted the ~7 bins
-# nearest each edge (visible as a spurious low-frequency bump/negative dip
-# in shape_v8's test-set predictions) — an architecture change, so v8 trials
-# (optuna_study_v8.db) are not comparable to v9 trials either.
-#
-# v10 (in place, no version bump — the original v10 DB was deleted before any
-# of these trials were compared against): switched the optimizer from
-# optim.Adam to optim.AdamW (nn/optimization.py::_train_model), narrowed lr's
-# search range to bracket shape_v9's best trials (1e-3 - 1.5e-2, was
-# 1e-4 - 1e-2), and split the single `dropout` hyperparameter into
-# `freq_embed_dropout` (FreqDimEmbedding's freq_embed_dim=8-wide internal
-# conv) and `embed_dropout` (PositionalEncoding, the top-level time-axis
-# TemporalConvFrontend, and nn.Transformer's own internal attention/FFN
-# dropout — this last one was previously never wired up at all and silently
-# stuck at PyTorch's default of 0.1). weight_decay's range is intentionally
-# left unchanged despite the optimizer switch: Adam's coupled L2 weight decay
-# and AdamW's decoupled weight decay behave differently for the same numeric
-# value, so shape_v9's Adam-tuned weight_decay values aren't known to
-# transfer. See nn/optimization.py::objective() for the exact ranges.
-#
-# v11: OBJECTIVE_METRIC (non-'hs' targets) switched from 'weighted_mean_SS' to
-# 'final_step_SS' (nn/optimization.py::_compute_val_score) — the exponential
-# per-step weighting biased trial/checkpoint selection toward the earlier,
-# easier autoregressive steps rather than the step that's actually the
-# forecast product at this lead time (intermediate steps are just
-# autoregressive scaffolding to get there). This changes what "best" means
-# for the same trial, so v10 trials are not comparable to v11 trials.
-#
-# v12: 'density'/'shape' targets now predict log-spectral-energy directly
-# (log E(f) / log E(f)/m0) instead of a Softplus-activated non-negative
-# linear value — see nn/transformer.py's predictor construction, and the
-# log-space transform applied to y_batch in nn/training_loop.py/nn/evaluate.py
-# (utils/log_transform.py::to_log_space). The training loss for these two
-# targets also switched from frequency-weighted RMSE to frequency-weighted
-# plain MSE, computed in log-space. This is an incompatible objective-function
-# change: v11 trials are not comparable to v12 trials. Two effects worth
-# flagging when actually running this study:
-#   - lr's search range (nn/optimization.py::objective(), currently
-#     1e-3-1.5e-2) was narrowed to bracket shape_v9's best trials under the
-#     OLD Softplus + physical-space-RMSE regime — same situation this file's
-#     own v10 comment already flagged for weight_decay after the Adam->AdamW
-#     switch. Consider widening it back out rather than assuming it still
-#     applies.
-#   - OBJECTIVE_METRIC choices derived from per_step_SS/overall_SS
-#     ('final_step_SS', 'weighted_mean_SS', 'overall_SS') are now computed in
-#     log-space for 'density'/'shape' and are NOT comparable to pre-v12 runs.
-#     'Hs_SS', 'Tm02_RMSE', and 'Shape_RMSE' are exp()'d back to physical
-#     units internally (nn/evaluate.py) and remain the fair basis for
-#     comparing this ablation against pre-v12 results.
-#
-# NOTE on the v11 -> v12 gap: the paragraph above was apparently written when
-# the log-spectral-energy / log-space-MSE change shipped, but STUDY_VERSION
-# itself was left at "v11" — no optuna_study_v12.db or results/shape_v12/
-# were ever produced under that label, yet shape_v11's actual results already
-# reflect this log-space behavior (current nn/training_loop.py code). So the
-# version bump for that change was seemingly never applied even though the
-# code and this comment shipped. Left as-is (not retroactively relabeled) —
-# "v12" below is the next genuinely unused version number, used for a
-# different, later change.
-#
-# v12: two additions, both validated by a manual before/after comparison
-# (not committed — reusing shape_v11's exact other hyperparameters) before
-# being wired into the search space here:
-#   - wasserstein_loss_weight (nn/optimization.py::objective(), new
-#     trial.suggest_float hyperparameter): an auxiliary SpectralWassersteinLoss
-#     term (utils/loss.py) for target=='shape' — at the time this was
-#     written, the 1-D Wasserstein-1 earth-mover distance between predicted
-#     and true spectra (exact via CDF L1 distance), added to the existing
-#     per-bin loss. Manually swept at weights 50/150 vs a 0-weight control:
-#     every metric improved monotonically (Shape_RMSE 2.244->2.083, Shape_SS
-#     0.107->0.171, Peak_Separation_Recall 0.580->0.617 at weight 150) and
-#     the improvement was confirmed visually sharper on known-multimodal
-#     test samples, not just numerically better — see nn/training_loop.py's
-#     docstring for why this term exists (a whole-spectrum frequency-weighted
-#     loss gives multimodal peaks no special treatment on its own; W1 pushes
-#     back on "too flat" specifically).
-#     NOTE (2026-08-17): SpectralWassersteinLoss was subsequently switched
-#     from W1 to W2 (quadratic transport cost, quantile-domain formula —
-#     see utils/loss.py's docstring) as part of the KL/Wasserstein/peak loss
-#     ablation. The manually-swept weights (50/150) and the 10-400 search
-#     range below were tuned under the OLD W1 metric's scale; W2's values
-#     are not known to share the same numeric scale (W1's ∫|CDF gap|df and
-#     W2's sqrt(∫(quantile gap)^2 dq) are different quantities, not just a
-#     rescaling of each other), so treat any live v12 trial completed before
-#     this date as using a different, incomparable wasserstein_loss_weight
-#     definition than trials completed after it.
-#   - AUX_SET switched from 'none' to 'dmd' (see below): Dynamic Mode
-#     Decomposition features (nn/prepare_dmd.py) computed per-sample from the
-#     encoder's input window of (already-normalized) density spectra — a few
-#     dominant modes' growth/decay rate and oscillation frequency, giving the
-#     encoder direct information about whether currently-observed wave
-#     systems are growing or decaying, rather than requiring the Transformer
-#     to infer that implicitly. Manually validated alone (smaller, less
-#     consistent effect than the Wasserstein term) and in combination with it
-#     (best Peak_Separation_Recall/Peak_Count_Pred_Mean of anything tested,
-#     and the visually sharpest/tallest peaks across every known-multimodal
-#     sample checked, even though whole-spectrum Shape_RMSE slightly favored
-#     the Wasserstein-only run — the two metrics disagreeing here is itself
-#     consistent with this project's recurring finding that aggregate
-#     spectrum-wide error metrics dilute peak-specific behavior).
-#   - OBJECTIVE_METRIC switched from 'final_step_SS' to
-#     'final_step_SS_wasserstein' (nn/optimization.py::_compute_val_score):
-#     training now includes the Wasserstein term above, so selecting
-#     epochs/trials by plain final_step_SS (blind to Shape_Wasserstein) would
-#     be inconsistent with what's actually being optimized for — risking
-#     silently discarding a better-separated-peaks checkpoint in favor of one
-#     that's marginally better on a metric known to dilute exactly that
-#     property. The blend uses a fixed constant weight
-#     (_FINAL_STEP_SS_WASSERSTEIN_BETA), not the trial's own
-#     wasserstein_loss_weight, to keep cross-trial comparison fair.
-#
-# v13: the composite-loss ablation (scripts/ablate_loss.py, STUDY_VERSION
-# lossablation_v2 — a small, fixed-architecture Optuna study, NOT this one)
-# tested 7 loss recipes against a wind-sea/swell-conditioned panel
-# (Peak_Height_RelError, Peak_Separation_Recall, Tm02_RMSE, Tm02_Bias, all
-# split by partition label) and found exactly one — base_loss_weight=0,
-# L = kl_loss_weight*D_KL + wasserstein_loss_weight*W2 + peak_loss_weight*
-# L_peak (the 'combined' phase) — that beat the plain per-bin loss on
-# EVERY one of those four metrics simultaneously; every other recipe
-# (KL alone, Wasserstein alone or +KL, Peak alone or +KL) traded at least
-# one of them away. Full results: results/lossablation_comparison_v2.md.
-# This version promotes that recipe from ablation-only into the real
-# search space:
-#   - kl_loss_weight, peak_loss_weight: NEW trial.suggest_float dimensions
-#     (see their own comments below) — previously manual-A/B/ablation-only
-#     (nn/training_loop.py's docstring).
-#   - wasserstein_loss_weight's range replaced wholesale (was 10-400, tuned
-#     under the OLD Wasserstein-1 metric before utils/loss.py's 2026-08-17
-#     W1->W2 switch — not comparable) with the range scripts/ablate_loss.py
-#     validated under the CURRENT W2 metric.
-#   - base_loss_weight=0.0 (literal substitute, not additive — see
-#     nn/training_loop.py's docstring) is passed as a FIXED constant below,
-#     not searched: which terms compose the loss is exactly what the
-#     ablation was for, not something to reopen here.
-#   - OBJECTIVE_METRIC switches to 'peak_fidelity_SS' (see its own comment
-#     below) — 'final_step_SS_wasserstein' is an RMSE transform, and
-#     training no longer optimizes RMSE at all (base_loss_weight=0), so it
-#     would reintroduce the same selection-metric/training-objective
-#     mismatch the ablation's own methodology (see nn/optimization.py::
-#     _compute_val_score's 'peak_fidelity_SS' docstring) was built to avoid.
-#   - n_startup_trials/n_trials bumped ~30% (15->20, 70->90) for the 3 new
-#     continuous dimensions (10->13 total) — see the comment near n_trials.
+# surrogate model. Full history of what changed at each version and why:
+# manuscript/decisions/README.md (entries 010-027 cover v8-v13).
 STUDY_VERSION = "v13"
 
 # Short slug used as the top-level folder under results/.
@@ -240,31 +88,15 @@ _args, _ = _parser.parse_known_args()
 lead_times_hours = [_args.lead] if _args.lead is not None else [12, 24, 48]
 target = "shape"
 
-# v13, both new (target == 'shape' only — see FIXED_HEAD_DIM/FIXED_NHEAD
-# below): a cross-version tally of every completed shape-target study
-# sharing the current freq_embed_dropout/embed_dropout search-space shape
-# (shape_v10/v11's best_trial.txt + shape_v12's current_best.txt, 8
-# (study, lead_time) data points) found head_dim=32 and nhead=8 each
-# winning 6/8 — no other hyperparameter here showed comparable cross-
-# lead-time/cross-version agreement (seq_len/batch_size/dropouts/
-# weight_decay each span nearly their entire range with no consensus
-# value, and num_encoder_layers' superficially similar 5/8 for value 4
-# included a lead_time — shape_v10's 6h — picking a very different value,
-# suggesting real lead-time-dependent capacity need rather than noise).
-# Fixing these removes 2 of the 13 dimensions below (see n_startup_trials/
-# n_trials); pass fixed_head_dim=None/fixed_nhead=None to nn.objective
-# instead to go back to searching them.
+# target == 'shape' only; pass fixed_head_dim=None/fixed_nhead=None to
+# nn.objective to go back to searching them. See manuscript/decisions/log/027.
 FIXED_HEAD_DIM = 32
 FIXED_NHEAD = 8
 
-# With 11 tunable hyperparameters (2 categorical — seq_len/batch_size,
-# head_dim/nhead pinned above — 2 int, 7 continuous: kl_loss_weight/
-# peak_loss_weight added in v13 alongside the existing wasserstein_loss_
-# weight), n_startup_trials=18 gives multivariate TPE enough random samples
-# to fit an initial KDE without eating too much of the budget on pure
-# random search; n_trials=80 leaves 62 trials for TPE to actually exploit
-# that model. Each of the 3 lead times (--lead) runs this same budget as
-# its own Slurm job — three ~80-trial studies, not one.
+# 11 tunable hyperparameters (2 categorical, 2 int, 7 continuous).
+# n_startup_trials=18 random samples for multivariate TPE's initial KDE;
+# n_trials=80 leaves 62 for TPE to exploit it. Each of the 3 lead times
+# (--lead) runs this budget as its own Slurm job.
 n_trials = 80
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
@@ -280,67 +112,23 @@ assert CHANNEL_SET in CHANNEL_SETS, f"CHANNEL_SET must be one of {list(CHANNEL_S
 #   'none' : no auxiliary input
 #   'wind' : wind_u/wind_v
 #   'dmd'  : Dynamic Mode Decomposition growth-rate/frequency/amplitude
-#            features from the input window's density history (nn/prepare_dmd.py)
-#            — current default as of v12, see STUDY_VERSION's changelog comment.
+#            features from the input window's density history
+#            (nn/prepare_dmd.py; manuscript/decisions/log/019)
 AUX_SET = "dmd"
 assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_SETS)}"
 
 # Metric used to select the best epoch, drive early stopping and LR scheduling,
-# and report the Optuna trial value.  Must be one of:
-#   'final_step_SS'     Skill Score at the last forecast step only — the
-#                       actual chosen lead time, since the intermediate
-#                       autoregressive steps are scaffolding, not a deliverable
-#   'weighted_mean_SS'  exponentially-weighted mean per-step Skill Score
-#                       (biases toward earlier/easier steps, not the step
-#                       that's actually forecast)
-#   'overall_SS'        Skill Score on flattened all-step RMSE
-#   'Hs_SS'             Hs Skill Score — robust to seq_len; use when Hs accuracy
-#                       is the primary goal. For target=='hs' equals overall_SS;
-#                       for target=='density' computed from denormalised spectra.
-#   'RMSE'              negative overall RMSE
-#   'Hs_RMSE'           negative Hs RMSE           (density target only)
-#   'Tm02_RMSE'         negative Tm02 RMSE          (density target only)
-#   'Shape_RMSE'        negative spectral shape RMSE (density target only)
-#   'SI_mean'           negative mean Scatter Index  (density target only)
-#   'final_step_SS_wasserstein'  final_step_SS minus a FIXED penalty on
-#                       Shape_Wasserstein (works for both 'shape' and
-#                       'density' targets — see nn/evaluate.py, which
-#                       computes 'Shape_Wasserstein' the same way, masked by
-#                       M0_MASK_THRESHOLD, for 'density') — see
-#                       nn/optimization.py::_FINAL_STEP_SS_WASSERSTEIN_BETA.
-#                       Added in v12 so that model/checkpoint SELECTION is
-#                       structurally consistent with what's actually being
-#                       TRAINED for (the loss now includes an auxiliary
-#                       Wasserstein term, wasserstein_loss_weight) — using
-#                       plain final_step_SS here would mean picking the best
-#                       trial/epoch by a criterion blind to the exact
-#                       peak-separation quality the Wasserstein term exists
-#                       to improve, which is the thing we actually care about
-#                       reporting. The blend weight is a separate, fixed
-#                       constant, deliberately NOT the trial's own
-#                       wasserstein_loss_weight (see that constant's comment
-#                       for why using the tunable per-trial weight here would
-#                       corrupt cross-trial comparison).
-#   'peak_fidelity_SS'  recall - rel_err, where rel_err/recall are each the
-#                       mean of Peak_Height_RelError/Peak_Separation_Recall
-#                       across wind-sea and swell partitions (utils/
-#                       spectral_peaks.py::peak_modality_metrics) — NOT an
-#                       RMSE transform, unlike every metric above. v13's
-#                       choice (target=='shape' only): training no longer
-#                       optimizes RMSE at all once base_loss_weight=0 (see
-#                       STUDY_VERSION's v13 comment), so 'final_step_SS'/
-#                       'final_step_SS_wasserstein' would pick epochs/trials
-#                       by a criterion adversarial to what's actually being
-#                       trained for — see nn/optimization.py::
-#                       _compute_val_score's docstring for the full
-#                       argument. Requires compute_peak_metrics=True (see
-#                       COMPUTE_PEAK_METRICS below).
+# and report the Optuna trial value. See nn/optimization.py::_compute_val_score
+# for the full definition of each; manuscript/decisions/log/{001,009,014,021,026}
+# for why each was introduced. Must be one of: 'final_step_SS', 'weighted_mean_SS',
+# 'overall_SS', 'Hs_SS', 'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean',
+# 'final_step_SS_wasserstein', 'peak_fidelity_SS' (target=='shape' only, requires
+# compute_peak_metrics=True — see COMPUTE_PEAK_METRICS below).
 OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity_SS"
 
-# v13, both new: assemble scripts/ablate_loss.py's validated 'combined'
-# recipe (see STUDY_VERSION's v13 comment) — target=='shape' only, since
-# that's the ablation's entire validated scope; base_loss_weight=1.0 (the
-# per-bin loss trains normally, unaffected) for every other target.
+# Assembles scripts/ablate_loss.py's validated 'combined' recipe (manuscript/
+# decisions/log/026) — target=='shape' only, since that's the ablation's
+# validated scope; base_loss_weight=1.0 (per-bin loss, unaffected) otherwise.
 BASE_LOSS_WEIGHT = 0.0 if target == "shape" else 1.0
 COMPUTE_PEAK_METRICS = (target == "shape")
 
@@ -379,33 +167,15 @@ if not _meta_path.exists():
         f"- **AUX_SET**: {AUX_SET}\n"
         f"- **BASE_LOSS_WEIGHT**: {BASE_LOSS_WEIGHT}\n"
         f"- **FIXED_HEAD_DIM / FIXED_NHEAD**: {FIXED_HEAD_DIM} / {FIXED_NHEAD} "
-        f"(shape target only; see STUDY_VERSION's v13 comment for the tally)\n"
+        f"(shape target only; see manuscript/decisions/log/027)\n"
         f"- **Architecture**: (fill in manually)\n"
     )
 
 
-# Different lead-time studies (12h/24h/48h) all share one
-# optuna_study_{STUDY_VERSION}.db file and are commonly launched as separate
-# concurrent processes. Plain sqlite:/// gives each writer only Python
-# sqlite3's default 5s busy-timeout, which isn't always enough under
-# contention -- a collision there surfaces as optuna.exceptions.
-# StorageInternalError ("exceeding max length" is just the generic message
-# text) during a trial's final state/value commit, crashing the whole run
-# and leaving that trial stuck as RUNNING forever. `timeout` makes each
-# connection wait out a lock instead of erroring immediately, which is
-# enough by itself since contention windows here are just brief per-trial
-# commits, not sustained overlapping writes.
-#
-# Deliberately NOT switching journal_mode to WAL despite WAL being the more
-# thorough fix for concurrent writers: the VS Code "Optuna Dashboard"
-# extension (right-click a .db file -> Open in Optuna Dashboard) reads the
-# file through a single-file sqlite-wasm VFS in the browser sandbox that
-# can't follow a WAL database's paired .db-wal/.db-shm side files, and its
-# own bundled code (dist/web/storage.worker.js) force-runs
-# `pragma journal_mode=DELETE` the instant it opens a file. Point it at a
-# WAL-mode db and it reads a stale/incomplete single-file snapshot -- this
-# broke the extension for the *entire* study history, not just new trials,
-# the first time it was tried.
+# The 12h/24h/48h studies share one optuna_study_{STUDY_VERSION}.db file and
+# are commonly launched as separate concurrent processes; timeout=30 avoids
+# lock contention errors under Python sqlite3's default 5s busy-timeout.
+# Deliberately not WAL mode — see manuscript/decisions/log/018.
 storage = optuna.storages.RDBStorage(
     url=f"sqlite:///optuna_study_{STUDY_VERSION}.db",
     engine_kwargs={"connect_args": {"timeout": 30}},
@@ -456,22 +226,10 @@ for lead_time_hours in lead_times_hours:
     sampler = optuna.samplers.TPESampler(
         n_startup_trials=18, multivariate=True, seed=42
     )
-    # 30-step warmup avoids the over-pruning seen at exactly epoch 20 in earlier
-    # studies (54% of 12h trials pruned at the boundary with n_warmup_steps=20).
-    # interval_steps=5 matches _train_model's PRUNER_SMOOTHING_WINDOW=5 trailing
-    # mean, so each check compares fresh, largely non-overlapping windows
-    # instead of re-checking the same slow-moving average every single epoch.
+    # See manuscript/decisions/log/005 (n_warmup_steps) and /015 (PatientPruner).
     median_pruner = optuna.pruners.MedianPruner(
         n_warmup_steps=30, n_min_trials=5, interval_steps=5
     )
-    # v10 analysis of the 24h study (see shape_v10 results) showed trials
-    # pruned right at the tf_ratio-decay/warmup boundary with scores
-    # statistically indistinguishable from the eventual best trial at that
-    # same epoch — the best trial itself dipped and recovered several times
-    # before reaching its peak ~30 epochs later. PatientPruner requires
-    # `patience` consecutive non-improving reports (on top of MedianPruner's
-    # own verdict) before actually pruning, so a trial must be stuck, not just
-    # dipping, before it's cut.
     pruner = optuna.pruners.PatientPruner(
         median_pruner, patience=10, min_delta=0.0
     )
@@ -488,9 +246,6 @@ for lead_time_hours in lead_times_hours:
         objective_fn,
         n_trials=n_trials,
         callbacks=[lambda study, trial: save_progress(study, trial, results_folder)],
-        # A single trial hitting CUDA OOM (e.g. a large batch_size /
-        # lead_time / embed_dim combination) must not take down the
-        # whole multi-hour study — mark it failed and keep going.
         catch=(torch.OutOfMemoryError,),
     )
     print("Best trial:")

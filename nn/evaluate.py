@@ -381,20 +381,6 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
     so validation-time early stopping / LR scheduling / Optuna's 'RMSE'
     objective are consistent with what the model is actually optimizing.
     'hs' has no frequency axis (output_dim=1) and is unaffected throughout.
-
-    Note on optimization equivalence
-    ---------------------------------
-    Skill Score is a monotone transformation of RMSE given a fixed persistence
-    baseline.  However, the persistence RMSE is NOT constant across Optuna
-    trials because `seq_len` is a hyperparameter — different seq_len values
-    produce different sample windows and therefore different last-observed
-    values.  Minimizing RMSE is therefore NOT strictly equivalent to maximizing
-    Skill Score across trials.  The optimizer should consequently use Skill
-    Score (or equivalently mean per-step RMSE relative to persistence) as its
-    objective for a fair comparison.  Currently, mean per-step RMSE is used,
-    which is a reasonable proxy but may favour configurations with easier
-    persistence baselines.  Flag this if you want to switch the Optuna
-    objective to mean per-step Skill Score.
     """
     model.eval()
     all_preds = []

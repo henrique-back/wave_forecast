@@ -29,7 +29,6 @@ METRICS = [
     ('val_SI_mean',           'SI mean ↓'),
 ]
 
-# Primary metric used in the cross-experiment comparison table.
 PRIMARY_METRIC = 'val_Shape_RMSE'
 PRIMARY_LABEL  = 'Shape RMSE'
 

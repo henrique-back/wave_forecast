@@ -21,25 +21,20 @@ def find_spectral_peaks(freqs, spectrum, f_max=0.4, energy_frac=0.05, min_bins=2
          "sandwich") — reject a minor ripple riding on the shoulder of a
          bigger partition.
 
-    This replaces the earlier scale-free prominence_frac=0.25 heuristic
-    (chosen by sweeping prominence_frac over shape_v11's lead_12h test set
-    until the mean peak count "looked" physically plausible — see git
-    history) with published, physically-motivated criteria that don't
-    depend on tuning a constant against one buoy's visual impression of how
-    many peaks are real.
+    Replaces an earlier scale-free prominence_frac heuristic — see
+    manuscript/decisions/log/008.
 
-    Note: as with the old prominence-based detector, scipy.signal.find_peaks
-    (used internally by find_significant_peaks) cannot flag a peak at index
-    0 or -1 (no two-sided neighbor to compare against). Per CLAUDE.md the
-    buoy's 0.02-0.485 Hz grid has density ~0 at both ends for typical sea
-    states, so this is a rare edge case — documented here rather than
-    engineered around.
+    Note: scipy.signal.find_peaks (used internally by find_significant_peaks)
+    cannot flag a peak at index 0 or -1 (no two-sided neighbor to compare
+    against). Per CLAUDE.md the buoy's 0.02-0.485 Hz grid has density ~0 at
+    both ends for typical sea states, so this is a rare edge case —
+    documented here rather than engineered around.
 
     Parameters
     ----------
-    freqs    : np.ndarray, shape (num_freqs,) — frequency grid [Hz].
-               Required (unlike the old prominence-only detector) because
-               criteria 1 and 2 are physical, not bin-index, quantities.
+    freqs    : np.ndarray, shape (num_freqs,) — frequency grid [Hz],
+               required because criteria 1 and 2 are physical, not
+               bin-index, quantities.
     spectrum : np.ndarray, shape (num_freqs,)
     f_max, energy_frac, min_bins : forwarded to
         utils.spectral_partitioning.find_significant_peaks — see its

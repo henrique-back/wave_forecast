@@ -1,8 +1,6 @@
 """
 Dynamic Mode Decomposition (DMD) features from the encoder's input window.
 
-Rather than asking the Transformer to infer implicitly from raw historical
-spectra whether the current swell/wind-sea systems are growing or decaying,
 DMD fits a linear operator A such that x_{t+1} ~= A x_t across a sample's
 seq_len window of (already-windowed, already-normalized) density spectra,
 then decomposes A into modes with complex eigenvalues -- each eigenvalue's
@@ -11,15 +9,12 @@ frequency. These per-mode (growth_rate, frequency, amplitude) triples are
 exposed as a new 'dmd' aux_set (nn/channels.py), broadcast across seq_len to
 match nn/prepare_aux.py's (samples, seq_len, channels) output contract --
 see that module's docstring for why DMD needs a *different* preparation
-function rather than reusing prepare_aux itself (DMD needs each sample's
-already-windowed history FIRST, to fit DMD on that sample's own history,
-whereas prepare_aux windows an already-fully-computed per-timestep series).
+function rather than reusing prepare_aux itself.
 
 Normalized (not physical) density is fine as DMD's input: DMD eigenvalues
-are invariant to a fixed per-bin linear rescaling (a similarity transform:
-if x_norm = D^-1 x_phys for a fixed diagonal D, then A_norm = D^-1 A_phys D,
-which has the SAME eigenvalues as A_phys) -- only mode amplitude becomes
-"relative to normalized units," still a meaningful feature.
+are invariant to a fixed per-bin linear rescaling (a similarity transform),
+so only mode amplitude becomes "relative to normalized units," still a
+meaningful feature. See manuscript/decisions/log/019.
 """
 import numpy as np
 

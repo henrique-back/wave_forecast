@@ -45,8 +45,8 @@ def eval_single_density(ckpt, density_d, alpha_1_d, alpha_2_d, r_1_d, r_2_d, win
             pred = model.infer(X, freqs, lead_time_steps, freq_means=freq_means, aux=aux)
 
             # pred/pers are log-spectral-energy (nn/transformer.py::infer(),
-            # utils/get_start_token.py); y is the raw dataset ground truth,
-            # still Ẽ = E/μ(f), unaffected by the ablation.
+            # utils/get_start_token.py; see manuscript/decisions/log/016) and
+            # need exp(); y is still normalised (Ẽ = E/μ(f)) and needs fm_np.
             all_pred.append(np.exp(pred.cpu().numpy()))
             all_true.append(y.cpu().numpy() * fm_np)
             all_pers.append(np.exp(pers.cpu().numpy()))
@@ -124,8 +124,8 @@ def eval_combined(project_root, experiment, deltat, lead, seed, density_d, alpha
             shape_pred = shape_model.infer(X_shape, freqs, lead_time_steps, freq_means=shape_freq_means,
                                            shape_means=shape_means, aux=aux_shape)
 
-            # shape_pred is log-shape (nn/transformer.py::infer()); exp()
-            # back to linear unit-area shape before recombining with m0.
+            # shape_pred is log-shape (nn/transformer.py::infer(), log 016);
+            # exp() back to linear unit-area shape before recombining with m0.
             shape_pred_np = np.exp(shape_pred.cpu().numpy())
             m0_pred = ((hs_pred / 4.0) ** 2).cpu().numpy()
             pred_phys = shape_pred_np * m0_pred
@@ -152,10 +152,8 @@ def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
     All frequency-axis-collapsing metrics ('RMSE', 'CC', 'Bias', 'R2' and
     per_step_* variants, plus 'Shape_RMSE'/'SI_mean' below) use
     utils.trapz_weights(freqs_np) rather than a plain arithmetic mean over
-    bins — the grid is log-spaced (dense near 0.02 Hz, coarse near 0.485 Hz),
-    so an unweighted mean over-represents the low-frequency region relative
-    to its actual share of the physical spectrum. This matches the
-    frequency-weighted training loss and nn/evaluate.py.
+    bins, matching the frequency-weighted training loss and nn/evaluate.py —
+    see manuscript/decisions/log/010.
     """
     freq_w = trapz_weights(freqs_np)   # (num_freqs,), sums to 1
 

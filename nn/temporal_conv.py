@@ -10,10 +10,9 @@ class TemporalConvFrontend(nn.Module):
         dilation=2: 5 timesteps
         dilation=4: 9 timesteps (combined stack covers 9h of hourly observations)
 
-    Each encoder token exiting this module already carries local context from
-    the surrounding window, so the subsequent Transformer self-attention layers
-    can specialise on long-range dependencies rather than spending capacity on
-    detecting local trends (rising swell, wind-sea growth, etc.).
+    Lets the subsequent Transformer self-attention layers specialise on
+    long-range dependencies rather than local trends — see
+    manuscript/decisions/log/002 for why this front-end was added.
 
     Applied to the encoder sequence only; the decoder sequence is left unchanged
     because its length equals lead_time (≤ 48 steps) and it already uses a
@@ -27,8 +26,8 @@ class TemporalConvFrontend(nn.Module):
                        reasonable fiction). Callers reusing this module along
                        a bounded, non-cyclic axis instead — e.g.
                        FreqDimEmbedding smoothing across frequency bins —
-                       should pass 'replicate' so the edge bins repeat rather
-                       than fabricating zero energy just outside the grid.
+                       should pass 'replicate' instead (see
+                       manuscript/decisions/log/011).
     """
 
     _DILATIONS = (1, 2, 4)

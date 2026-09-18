@@ -1,27 +1,21 @@
 """
 Small, fixed-architecture Optuna studies for the KL/Wasserstein/peak
-composite-loss ablation (see CLAUDE.md's "Shape/magnitude model split" area
-and the loss-ablation discussion around utils/loss.py's SpectralWasserstein
-Loss, SpectralKLDivergenceLoss, SoftPeakHeightLoss).
+composite-loss ablation. See manuscript/decisions/log/026 for the result
+and manuscript/decisions/wasserstein_kl_justification.tex for the loss
+terms' own citation-backed justification.
 
 Unlike scripts/optimize.py, this does NOT search architecture/training
 hyperparameters — those are PINNED to shape_v12's lead_12h reference config
-(results/shape_v12/shape/lead_12h/current_best.txt, 54/70 trials complete
-at time of writing) so every arm below is a controlled comparison of LOSS
-FUNCTION CHOICE alone, holding everything else fixed. This is deliberate,
-not a shortcut: re-searching a ~10-dimensional architecture space with a
-~15-trial budget would rediscover nothing reliable (shape_v9/v10/v11's own
-70-trial searches never converged to one stable seq_len/num_layers/
-batch_size across lead times — see git history / RESEARCH_LOG.md), AND
-would confound "did the loss change help" with "did we get luckier on
-architecture this run". Only Optuna's TPE/pruner machinery is reused, over
-a 1- or 2-dimensional search space per phase.
+(results/shape_v12/shape/lead_12h/current_best.txt) so every arm below is a
+controlled comparison of LOSS FUNCTION CHOICE alone, holding everything
+else fixed. Only Optuna's TPE/pruner machinery is reused, over a 1- or
+2-dimensional search space per phase.
 
 IMPORTANT: SpectralWassersteinLoss switched from Wasserstein-1 to
-Wasserstein-2 on 2026-08-17 (quantile-domain formula, see utils/loss.py's
-docstring) — shape_v12's own wasserstein_loss_weight values (e.g. 181.67 at
-lead_12h) were tuned under the OLD W1 metric and are NOT reused here; the
-'wasserstein' phase below retunes it from scratch under W2.
+Wasserstein-2 on 2026-08-17 (manuscript/decisions/log/024) — shape_v12's own
+wasserstein_loss_weight values (e.g. 181.67 at lead_12h) were tuned under
+the OLD W1 metric and are NOT reused here; the 'wasserstein' phase below
+retunes it from scratch under W2.
 
 Phases (run via --phase; each phase after 'kl' depends on the 'kl' phase's
 winning kl_loss_weight, read back from its own current_best.txt — run them
@@ -64,22 +58,16 @@ in order):
                  L_peak, the original proposal, assembled from each term's
                  own best individually-tuned weight as the starting point.
 
-Every phase's search RANGE below is a first guess (no manual pre-sweep
-exists yet for kl_loss_weight/peak_loss_weight, unlike wasserstein_loss_
-weight's original W1-era 10-400 bracket, itself now stale) — widen if a
-phase's trials cluster at either edge, same convention nn/optimization.py's
-objective() already uses for its own under-explored ranges (see e.g. lr's
-docstring there).
+Every phase's search RANGE below is a first guess — widen if a phase's
+trials cluster at either edge.
 
 Scoreboard: judge each phase's winner using the wind-sea/swell-conditioned
 panel from utils/spectral_peaks.py::peak_modality_metrics (Peak_Height_
 RelError_windsea/_swell, Peak_Separation_Recall_windsea/_swell, Tm02_RMSE_
-windsea/_swell) plus the whole-spectrum Tm02_RMSE/Bias — NOT Shape_RMSE/
-Shape_SS as the primary criterion (see the loss-ablation discussion:
-RMSE-family metrics are structurally biased toward the blurry/hedged
-predictions these new loss terms exist to move away from). Run
-scripts/compare_versions.py or a bespoke evaluate() pass with
-compute_peak_metrics=True against each phase's best_model.pt for this.
+windsea/_swell) plus the whole-spectrum Tm02_RMSE/Bias, NOT Shape_RMSE/
+Shape_SS (see manuscript/decisions/log/026). Run scripts/compare_versions.py
+or a bespoke evaluate() pass with compute_peak_metrics=True against each
+phase's best_model.pt for this.
 
 Usage:
     python scripts/ablate_loss.py --phase baseline
@@ -108,46 +96,18 @@ from utils import get_freqs, set_seed, get_device, empty_cache, save_progress, r
 set_seed(42)
 
 BUOY_ID = "32012"
-# v1 -> v2 (2026-08-19): OBJECTIVE_METRIC switched from 'final_step_SS' to
-# 'peak_fidelity_SS' -- final_step_SS is an RMSE transform, and using it to
-# pick the best epoch/trial for arms that don't train on RMSE at all
-# (base_loss_weight=0) silently biased weight-selection toward whichever
-# value stayed closest to unperturbed RMSE-friendly behavior. v1's DB/
-# results (baseline/kl/wasserstein completed, peak killed ~12h in) are
-# incomparable and kept as historical record, per this project's own
-# STUDY_VERSION convention (see scripts/optimize.py) -- not deleted, just
-# superseded.
+# v1's DB/results (baseline/kl/wasserstein completed, peak killed ~12h in)
+# used 'final_step_SS' and are incomparable/superseded — see
+# manuscript/decisions/log/009 for why v2 uses 'peak_fidelity_SS' instead.
 STUDY_VERSION = "lossablation_v2"
 LEAD_TIME_HOURS = 12
 TARGET = "shape"
 CHANNEL_SET = "full"
 AUX_SET = "dmd"
-OBJECTIVE_METRIC = "peak_fidelity_SS"  # NOT 'final_step_SS' (2026-08-19 fix —
-                                     # see nn/optimization.py::_compute_val_score's
-                                     # docstring). final_step_SS/final_step_SS_
-                                     # wasserstein are both transforms of RMSE
-                                     # (SS = 1 - RMSE_model/RMSE_persistence);
-                                     # using either to pick the best epoch/trial
-                                     # while base_loss_weight=0 arms train on
-                                     # something other than RMSE entirely
-                                     # reintroduces the exact blur-bias problem
-                                     # this ablation's own scoreboard exists to
-                                     # avoid — silently biasing which weight gets
-                                     # reported as the winner toward whichever
-                                     # one stayed closest to unperturbed
-                                     # RMSE-friendly behaviour, regardless of
-                                     # whether it actually improved peak
-                                     # fidelity. 'peak_fidelity_SS' is not
-                                     # rooted in RMSE and is applied uniformly
-                                     # to every phase, including 'baseline' —
-                                     # even though baseline's own per-bin loss
-                                     # IS RMSE-like (so final_step_SS would have
-                                     # been self-consistent for that one phase
-                                     # specifically), using the SAME criterion
-                                     # everywhere is simpler to defend than a
-                                     # special-cased exception, and peak
-                                     # fidelity is a reasonable, non-adversarial
-                                     # proxy even for an RMSE-trained model.
+OBJECTIVE_METRIC = "peak_fidelity_SS"  # applied uniformly to every phase,
+                                     # including 'baseline', for a consistent
+                                     # cross-phase comparison — see
+                                     # manuscript/decisions/log/009
 MAX_PEAKS = 4
 
 # Architecture + training hyperparameters pinned from

@@ -40,23 +40,9 @@ def _normalize(train_df, *other_dfs, mode='zscore'):
 
 
 # Fixed blend weight for the 'final_step_SS_wasserstein' objective_metric —
-# deliberately NOT tied to the trial's own (tunable) wasserstein_loss_weight
-# hyperparameter. Using the trial's own weight here would make cross-trial
-# comparison unfair: trials sampling a large wasserstein_loss_weight would
-# get a structurally different scoring scale than trials sampling a small
-# one, purely from that hyperparameter choice, corrupting the very
-# comparison Optuna's search depends on. This is a separate, constant
-# analyst choice instead.
-#
-# Value chosen by rough order-of-magnitude matching against observed test-set
-# ranges from the manual validation (not a precisely fit constant — revisit
-# once real study data exists): final_step_SS-family metrics sit around
-# 0.1-0.2 in this problem (e.g. best_val_weighted_mean_SS was 0.17-0.18
-# across the manually-tested configs), while Shape_Wasserstein sits around
-# 0.011-0.014 for well-trained models. BETA=10 puts a typical
-# Shape_Wasserstein contribution (~0.1-0.14) on a comparable scale to a
-# typical SS value, so neither term structurally dominates the other by
-# construction alone.
+# deliberately not the trial's own tunable wasserstein_loss_weight, which
+# would make cross-trial comparison unfair. Order-of-magnitude estimate, not
+# precisely fit — see manuscript/decisions/log/021.
 _FINAL_STEP_SS_WASSERSTEIN_BETA = 10.0
 
 
@@ -78,75 +64,24 @@ def _weighted_mean_ss(per_step_ss):
 def _compute_val_score(metrics: dict, objective_metric: str) -> float:
     """Return a 'higher is better' scalar for the given metric name.
 
-    All metrics are transformed so that higher = better, matching Optuna's
-    'maximize' direction:
-    - Skill Scores are already higher-is-better.
-    - Error metrics (RMSE, Hs_RMSE, etc.) are negated.
+    Skill Scores are already higher-is-better; error metrics (RMSE,
+    Hs_RMSE, etc.) are negated. Valid values for objective_metric:
+    'final_step_SS', 'weighted_mean_SS', 'overall_SS', 'Hs_SS', 'RMSE',
+    'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean',
+    'final_step_SS_wasserstein', 'peak_fidelity_SS'.
 
-    Valid values for objective_metric:
-        'final_step_SS'    : Skill Score at the last forecast step only (i.e.
-                             the actual chosen lead time — steps before it are
-                             autoregressive scaffolding, not a deliverable in
-                             their own right)
-        'weighted_mean_SS' : exponentially-weighted mean per-step Skill Score
-                             (robust to variable seq_len, but biases toward
-                             the earlier/easier steps rather than the step
-                             that's actually forecast)
-        'overall_SS'       : Skill Score on flattened all-step RMSE
-        'Hs_SS'            : Hs Skill Score — robust to seq_len variation and
-                             directly targets Hs. For target=='hs' equals
-                             overall_SS; for target=='density' computed from
-                             denormalised spectra (see evaluate.py).
-        'RMSE'             : negative overall RMSE
-        'Hs_RMSE'          : negative Hs RMSE (density target only)
-        'Tm02_RMSE'        : negative Tm02 RMSE (density target only)
-        'Shape_RMSE'       : negative spectral shape RMSE (density target only)
-        'SI_mean'          : negative mean Scatter Index (density target only)
-        'final_step_SS_wasserstein' : final_step_SS minus a fixed penalty on
-                             Shape_Wasserstein (shape target only, for now —
-                             Shape_Wasserstein is only computed in that
-                             target's evaluate() block). See
-                             _FINAL_STEP_SS_WASSERSTEIN_BETA's comment for why
-                             this exists and why its weight is NOT the same
-                             as the training-time wasserstein_loss_weight.
-        'peak_fidelity_SS' : NOT rooted in RMSE — see module docstring below
-                             for why that matters for scripts/ablate_loss.py.
-                             recall - rel_err, where rel_err is the mean of
-                             Peak_Height_RelError_windsea/_swell (lower
-                             better) and recall is the mean of
-                             Peak_Separation_Recall_windsea/_swell (higher
-                             better) — both from utils.spectral_peaks.
-                             peak_modality_metrics, target=='shape' only.
-                             Requires compute_peak_metrics=True on the
-                             evaluate() call that produced `metrics`
-                             (KeyError otherwise — deliberately not silently
-                             falling back to an RMSE-rooted metric, which
-                             would defeat the point). float('-inf') if no
-                             true peak was detected in EITHER label across
-                             the whole validation pass (both quantities NaN
-                             together by construction — see
-                             peak_modality_metrics) rather than propagating
-                             NaN into the LR scheduler/pruner.
-
-    A note on 'peak_fidelity_SS' specifically: this project's loss-ablation
-    study (scripts/ablate_loss.py) trains several of its arms on a loss that
-    is NOT RMSE at all (base_loss_weight=0 — see nn/training_loop.py's
-    docstring) — substituting the per-bin loss with SpectralKLDivergenceLoss/
-    SpectralWassersteinLoss/SoftPeakHeightLoss instead. Every other
-    objective_metric above (including 'final_step_SS_wasserstein') is a
-    transform of RMSE (SS = 1 - RMSE_model/RMSE_persistence); using one of
-    those to pick the best epoch/trial for a run that isn't optimizing RMSE
-    reintroduces exactly the structural blur-bias problem the ablation's own
-    scoreboard (utils.spectral_peaks.peak_modality_metrics's wind-sea/swell
-    breakdown) exists to avoid — a candidate barely perturbed away from
-    RMSE-friendly behaviour would look spuriously "best" regardless of
-    whether it actually improved peak fidelity, silently biasing which
-    kl_loss_weight/wasserstein_loss_weight/peak_loss_weight gets reported as
-    the winner. 'peak_fidelity_SS' is not adversarial to any of those
-    losses (all three are explicitly trying to improve peak/multimodal
-    fidelity, so this tracks a reasonable, non-circular proxy for "did it
-    work" without being identical to any one loss term itself, the same way
-    the final cross-arm comparison already avoids Shape_RMSE/SS).
+    'peak_fidelity_SS' is the odd one out: NOT a transform of RMSE, unlike
+    every other option (recall - rel_err from utils.spectral_peaks.
+    peak_modality_metrics, target=='shape' only; requires
+    compute_peak_metrics=True on the evaluate() call, KeyError otherwise —
+    deliberately not falling back to an RMSE-rooted metric; float('-inf')
+    if no true peak was detected in either label). Needed because
+    scripts/ablate_loss.py trains several arms on a loss that isn't RMSE at
+    all (base_loss_weight=0), so an RMSE-rooted selection metric would bias
+    trial/epoch selection back toward RMSE-friendly behaviour regardless of
+    whether peak fidelity actually improved. See manuscript/decisions/log/
+    001 ('weighted_mean_SS'), 009/026 ('peak_fidelity_SS'), 014
+    ('final_step_SS'), 021 ('final_step_SS_wasserstein').
     """
     if objective_metric == 'final_step_SS':
         return metrics['per_step_SS'][-1]
@@ -205,42 +140,16 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
     reports the per-epoch score to Optuna and prunes on its signal; this is
     the only behavioural difference between the two callers.
 
-    compute_peak_metrics : bool, default False (no behavior change) —
-        forwarded to every per-epoch evaluate(..., compute_peak_metrics=...)
-        call. Only needs to be True when objective_metric == 'peak_fidelity_
-        SS' (scripts/ablate_loss.py) — left False for every other caller
-        (the live shape_v12-style objective() search) to avoid the extra
-        per-epoch scipy peak-detection pass over the validation set when
-        nothing consumes its output.
+    compute_peak_metrics : bool, default False — forwarded to every per-epoch
+        evaluate(...) call. Only needs to be True for objective_metric ==
+        'peak_fidelity_SS' (scripts/ablate_loss.py).
 
-    wasserstein_loss_weight : float, target == 'shape' only, default 0.0 (no
-        behavior change) — forwarded to train_one_epoch's auxiliary
-        SpectralWassersteinLoss term (see nn/training_loop.py docstring).
-        Tuned by objective() as of optimize.py v12 (trial.suggest_float
-        'wasserstein_loss_weight'); scripts/train.py reads the winning
-        trial's value back out of best_trial.txt's params rather than
-        setting it manually. NOTE: SpectralWassersteinLoss switched from
-        Wasserstein-1 to Wasserstein-2 on 2026-08-17 (see utils/loss.py) —
-        weights tuned before that date are on a different numeric scale
-        and not directly comparable to weights tuned after it.
-    kl_loss_weight : float, target in ('density', 'shape') only, default
-        0.0 (no behavior change) — forwarded to train_one_epoch's auxiliary
-        SpectralKLDivergenceLoss term (see nn/training_loop.py /
-        utils/loss.py docstrings). Unlike wasserstein_loss_weight, NOT
-        tuned by objective() yet — no manually-swept range exists yet to
-        base a trial.suggest_float bracket on, and the live v12 study
-        shouldn't be disrupted by an unplanned STUDY_VERSION bump. This is
-        a manual-A/B-sweep-only parameter for now (Stage 1); promoting it
-        to the search space (Stage 2) bumps STUDY_VERSION per the existing
-        convention for any new objective() hyperparameter.
-    base_loss_weight : float, default 1.0 (no behavior change) — forwarded
-        to train_one_epoch; see its docstring. Only ever changed by the
-        loss-ablation study (scripts/ablate_loss.py), which sets it to 0.0
-        to literally substitute the per-bin loss rather than add to it.
+    wasserstein_loss_weight, kl_loss_weight, base_loss_weight,
     peak_loss_weight, peak_max_count : forwarded to train_one_epoch's
-        auxiliary SoftPeakHeightLoss term — see its docstring and
-        utils/loss.py's SoftPeakHeightLoss. Like kl_loss_weight, not yet
-        in objective()'s search space; manual-A/B/ablation-only for now.
+        auxiliary loss terms — see that function's docstring for what each
+        one does. See manuscript/decisions/log/020 (Wasserstein term),
+        024 (its W1->W2 switch), 026 (the composite-loss ablation that
+        validated kl_loss_weight/peak_loss_weight).
 
     Returns (best_val_score, best_val_metrics, best_model_state) — note
     best_val_score is the SMOOTHED score (see VAL_SCORE_SMOOTHING_WINDOW
@@ -253,42 +162,18 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         optimizer, mode='max', patience=5, factor=0.5, cooldown=2
     )
 
-    # Linear LR warmup: this transformer has no warmup and trains AdamW at the
-    # sampled lr from epoch 0, which is known to be unstable for transformers
-    # at the higher end of a search range. Optuna analysis of shape_v11/v12
-    # found lr dominating hyperparameter importance (0.23-0.69) while only
-    # weakly correlating with score (0.23-0.47) — the best and worst trials at
-    # every lead time drew lr from almost the same range, the signature of
-    # noisy/unstable early training rather than a clean optimum TPE can
-    # exploit. Ramping up to the sampled lr over the first few epochs should
-    # cut that instability and let the true hyperparameter signal (lr's own
-    # and everyone else's) come through more cleanly. ReduceLROnPlateau only
-    # starts stepping once warmup ends, so the ramp itself is never mistaken
-    # for a plateau.
+    # Ramps AdamW up to the sampled lr over the first few epochs instead of
+    # applying it from epoch 0. ReduceLROnPlateau only starts stepping once
+    # warmup ends. See manuscript/decisions/log/022.
     WARMUP_EPOCHS = 5
 
-    # tf_ratio decays from 1.0 to 0.0 over 2×patience epochs.  With early
-    # stopping at patience=20, a run going to epoch ~40 will have tf_ratio
-    # ≈ 0.5 — half its training steps use the model's own predictions, which
-    # meaningfully closes the teacher-forcing / autoregressive distribution gap.
+    # tf_ratio decays linearly from 1.0 to 0.0 over tf_decay_epochs.
     tf_decay_epochs = 2 * patience
 
-    # Epoch-to-epoch val_score is noisy (autoregressive eval on a small val
-    # split) — this trailing mean smooths it before it drives ANY decision:
-    # the LR scheduler, early-stopping/checkpoint selection, AND (when
-    # running as an Optuna trial) the pruner report. Originally only the
-    # pruner report was smoothed (best_val_score/early-stopping used the raw
-    # per-epoch value on the reasoning that picking a checkpoint was lower-
-    # stakes than pruning a whole trial) — that assumption broke for the
-    # 'final_step_SS_wasserstein' objective_metric: its Shape_Wasserstein
-    # term has enough of its own per-epoch variance (amplified by
-    # _FINAL_STEP_SS_WASSERSTEIN_BETA) that an unsmoothed run locked its best
-    # checkpoint onto an early noise spike (epoch 14) and never recognized
-    # genuinely continued improvement in later epochs (Shape_SS climbing
-    # steadily through epoch 30+) as "better" — early stopping then fired on
-    # a stale, undertrained checkpoint. Smoothing everything from the same
-    # trailing window removes that failure mode instead of just the pruner's
-    # narrower version of it.
+    # Trailing mean smoothing every val_score-driven decision (LR scheduler,
+    # early-stopping/checkpoint selection, and the Optuna pruner report) from
+    # the same window, not just the pruner as originally — see
+    # manuscript/decisions/log/023.
     VAL_SCORE_SMOOTHING_WINDOW = 5
     val_score_history = []
 

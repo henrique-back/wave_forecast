@@ -110,10 +110,9 @@ class WaveHeightBaselineNN(nn.Module):
         )
 
         # Output layer — predict either 1 value (hs) or num_freqs (density/shape).
-        # density/shape predict log-spectral energy (log E(f) or log E(f)/m0)
-        # rather than the physical value directly — non-negativity of the
-        # physical quantity is then guaranteed for free by exp() at the
-        # point of use, with no architectural constraint needed here.
+        # density/shape predict log-spectral energy (log E(f) or log E(f)/m0);
+        # non-negativity comes from exp() at the point of use. See
+        # manuscript/decisions/log/016.
         output_dim = 1 if self.target == 'hs' else num_freqs
         self.predictor = nn.Linear(embed_dim, output_dim)
 

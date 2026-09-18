@@ -10,21 +10,10 @@ def _peak_windows_for_batch(y_batch, freqs_np, max_peaks=4, f_max=0.4,
                              energy_frac=0.05, min_bins=2):
     """Per-batch, per-step peak-window detection for SoftPeakHeightLoss.
 
-    Pragmatic alternative to the "precompute once, at data-preparation
-    time" design utils.loss.SoftPeakHeightLoss's docstring calls for (see
-    also utils.spectral_partitioning.find_peak_windows's docstring) — doing
-    it here, per training batch, pays scipy.signal.find_peaks' Python-loop
-    cost every batch of every epoch rather than once per trial.
-    Deliberately accepted for now: this path only runs when
-    peak_loss_weight > 0 (zero cost otherwise), and threading a
-    precomputed, dataset-level peak-window tensor through
-    WaveSpectralDataset/_prepare_dataloaders would touch every consumer of
-    that Dataset's (src, aux, y_batch) 3-tuple across nn/evaluate.py and
-    every scripts/*.py that iterates a DataLoader directly — a larger
-    refactor than this loss-ablation ablation's peak-loss arm currently
-    justifies. Revisit (move to _prepare_dataloaders, computed once per
-    trial like freq_means/shape_means) if profiling shows this dominates
-    trial wall-clock time.
+    Pragmatic alternative to precomputing windows once at data-preparation
+    time (see utils.loss.SoftPeakHeightLoss's docstring) — accepted for now
+    since this only runs when peak_loss_weight > 0. See
+    manuscript/decisions/log/025.
 
     Parameters
     ----------
@@ -99,66 +88,30 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         Required for target == 'shape': y_batch (already physical, per
         prepare_y) is converted to log-space the same way as above.
     wasserstein_loss_weight : float
-        target in ('density', 'shape') only. Default 0.0 (no behavior
-        change). When > 0, adds wasserstein_loss_weight *
-        utils.SpectralWassersteinLoss(y_pred, y_batch, freqs) to the main
-        per-bin loss — the 1-D Wasserstein-2 (quadratic earth-mover)
-        distance between predicted and true spectra, computed via
-        quantile-function inversion (see utils/loss.py; W1's exact CDF-L1
-        shortcut has no p=2 analogue, so this needs the more general
-        quantile-domain formula). SpectralWassersteinLoss internally exp()s
-        and mass-normalizes its input, so it is not actually shape-specific
-        — the same call works for 'density's log-spectral-energy
-        y_pred/y_batch unchanged. Unlike the main per-bin loss, Wasserstein
-        is forgiving of small peak-position shifts while still penalizing a
-        blurred/flattened prediction relative to a sharp true spectrum —
-        aimed at the same multimodal-blur problem as the (reverted)
-        SpectralSlopeLoss experiment, via a different mechanism.
+        target in ('density', 'shape') only, default 0.0. When > 0, adds
+        wasserstein_loss_weight * utils.SpectralWassersteinLoss(y_pred,
+        y_batch, freqs) to the main per-bin loss. See utils/loss.py and
+        manuscript/decisions/log/020, 024.
     kl_loss_weight : float
-        target in ('density', 'shape') only. Default 0.0 (no behavior
-        change). When > 0, adds kl_loss_weight *
-        utils.SpectralKLDivergenceLoss(y_pred, y_batch, freqs) to the main
-        per-bin loss — KL divergence between predicted/true spectra treated
-        as Δf-weighted probability distributions over frequency (see
-        utils/loss.py; gradient-equivalent to a plain cross-entropy term,
-        used instead of one purely so this reports exactly 0 at a perfect
-        match). Unlike wasserstein_loss_weight, NOT yet tuned by
-        nn/optimization.py::objective() — no manually-swept range exists
-        yet to base a search bracket on, so this is a manual-A/B-only
-        parameter for now (Stage 1); promoting it to Optuna's search space
-        is a deferred follow-up. Complementary to (not a substitute for)
-        the Wasserstein term: this KL term has no cross-bin spatial
-        awareness (a coherently shifted peak is still fully penalized), but
-        weights the main per-bin loss's floor-crossing errors by how much
-        true probability mass the affected bin actually holds, discounting
-        a peak that broadens into its neighbourhood (while still covering
-        its true bin) relative to the current frequency-weighted
-        log-space MSE, which penalizes that case more than a full shift.
-    base_loss_weight : float, default 1.0 (no behavior change)
-        Multiplies the main per-bin loss term (loss_fn above) before any
-        auxiliary term is added. Exists for the loss-ablation study
-        (CLAUDE.md's KL/Wasserstein/peak composite-loss discussion): set to
-        0.0 to literally SUBSTITUTE the per-bin loss with (a combination
-        of) the auxiliary terms below, rather than adding them on top of
-        it — matching the ablation's original proposal
-        L = D_KL + lambda_1*W2(shape) + lambda_2*L_peak, which has no
-        per-bin MSE term at all. Left at 1.0 for every non-ablation caller.
+        target in ('density', 'shape') only, default 0.0. When > 0, adds
+        kl_loss_weight * utils.SpectralKLDivergenceLoss(y_pred, y_batch,
+        freqs) to the main per-bin loss. Complementary to (not a substitute
+        for) the Wasserstein term — see utils/loss.py's docstring.
+    base_loss_weight : float, default 1.0
+        Multiplies the main per-bin loss term before any auxiliary term is
+        added. Set to 0.0 by the loss-ablation study to literally SUBSTITUTE
+        the per-bin loss with the auxiliary terms rather than adding to it.
+        See manuscript/decisions/log/026.
     peak_loss_weight : float
-        target in ('density', 'shape') only. Default 0.0 (no behavior
-        change). When > 0, adds peak_loss_weight *
-        utils.SoftPeakHeightLoss(y_pred, y_batch, freqs, left_idx,
-        right_idx, peak_mask) to the loss — a differentiable "soft peak
-        height" term (see utils/loss.py) that, unlike wasserstein_loss_weight/
-        kl_loss_weight, needs per-(sample, step) peak windows computed from
-        y_batch first; see _peak_windows_for_batch above for why that's done
-        per-batch here rather than precomputed once per trial. Skipped (no
-        contribution to the loss) for any batch where SoftPeakHeightLoss's
-        'mean' reduction returns NaN (no sample in that batch has ANY
-        detected peak — see that class's K=0 handling) rather than
-        poisoning the whole batch's gradient with a NaN loss.
+        target in ('density', 'shape') only, default 0.0. When > 0, adds
+        peak_loss_weight * utils.SoftPeakHeightLoss(y_pred, y_batch, freqs,
+        left_idx, right_idx, peak_mask) to the loss. Skipped (no
+        contribution) for any batch where SoftPeakHeightLoss's 'mean'
+        reduction returns NaN (no sample in that batch has any detected
+        peak) rather than poisoning the batch's gradient with NaN.
     peak_max_count : int, default 4
-        Forwarded to _peak_windows_for_batch as max_peaks — see its
-        docstring. No-op when peak_loss_weight == 0.
+        Forwarded to _peak_windows_for_batch as max_peaks. No-op when
+        peak_loss_weight == 0.
 
     For 'density'/'shape' targets, the loss is additionally weighted across
     the frequency axis by utils.trapz_weights(freqs) — the grid is
@@ -219,16 +172,8 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
             # Scheduled sampling: for each sample in the batch independently,
             # feed the ground-truth previous token with probability tf_ratio,
             # and the model's own previous prediction with probability
-            # (1 - tf_ratio). This closes the gap between teacher-forced
-            # training and autoregressive evaluation.
-            #
-            # The choice is drawn per-sample (not once for the whole batch)
-            # so that, on average, every batch/epoch sees a mix of teacher-
-            # forced and self-generated context close to the target tf_ratio.
-            # A single batch-wide draw would instead make whole batches
-            # uniformly "easy" (teacher-forced) or "hard" (autoregressive,
-            # error-compounding) purely by chance, injecting a lot of
-            # spurious epoch-to-epoch variance into the training signal.
+            # (1 - tf_ratio). Drawn per-sample, not per-batch — see
+            # manuscript/decisions/log/012.
             lead_time = y_batch.shape[1]
             # src never changes across decode steps — encode it once and
             # reuse across the loop instead of re-running the encoder at

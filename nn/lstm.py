@@ -8,14 +8,12 @@ class WaveHeightBaselineNN(nn.Module):
         self.num_channels = num_channels
         self.lstm_hidden_size = lstm_hidden_size
         
-        # LSTM input size is num_freqs * num_channels
         self.lstm = nn.LSTM(input_size=num_freqs * num_channels,
                             hidden_size=lstm_hidden_size,
                             num_layers=lstm_layers,
                             batch_first=True,
                             bidirectional=False)
-        
-        # Output layer
+
         output_dim = 1 if target == 'hs' else num_freqs
         self.fc = nn.Linear(lstm_hidden_size, output_dim)
     
@@ -24,13 +22,10 @@ class WaveHeightBaselineNN(nn.Module):
         
         batch_size, seq_len, num_freqs, num_channels = x.shape
         
-        # Flatten frequency and channel dims
         x = x.view(batch_size, seq_len, num_freqs * num_channels)
-        
-        # LSTM output: (batch_size, seq_len, hidden_size)
-        lstm_out, _ = self.lstm(x)
-        
-        # Take last time step's output for prediction
+
+        lstm_out, _ = self.lstm(x)  # (batch_size, seq_len, hidden_size)
+
         last_out = lstm_out[:, -1, :]  # (batch_size, hidden_size)
         
         y_pred = self.fc(last_out)     # (batch_size, 1)

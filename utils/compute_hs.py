@@ -18,12 +18,9 @@ def compute_hs_from_density(density_batch, freqs):
         Significant wave height, shape (batch, lead_time) 
         or (n_samples,).
     """
-    # Handle both 2D (time, freq) and 3D (batch, lead_time, freq) inputs
     if density_batch.ndim == 2:
-        # (time, num_freqs)
         m0 = np.trapezoid(density_batch, freqs, axis=1)  # (time,)
     elif density_batch.ndim == 3:
-        # (batch, lead_time, num_freqs)
         m0 = np.trapezoid(density_batch, freqs, axis=2)  # (batch, lead_time)
     else:
         raise ValueError("density_batch must be 2D or 3D array")
@@ -64,13 +61,13 @@ def trapz_weights(freqs):
     Per-bin trapezoidal integration weights for a frequency grid, normalised
     to sum to 1.
 
-    The buoy's frequency grid is log-spaced (dense near 0.02 Hz, coarse near
-    0.485 Hz), so a plain arithmetic mean over bins over-represents the
-    low-frequency region relative to its actual contribution to a physical
-    integral. weights * values summed approximates
-    ∫ f(x) dx / (freqs[-1] - freqs[0]) — i.e. a frequency-weighted mean
-    consistent with the trapezoidal rule used elsewhere (compute_bulk_params,
-    compute_shape) for spectral moments.
+    Corrects for the buoy's log-spaced grid (dense near 0.02 Hz, coarse near
+    0.485 Hz), on which a plain arithmetic mean over bins would over-weight
+    the low-frequency region relative to its actual contribution to a
+    physical integral — see manuscript/decisions/log/010. weights * values
+    summed approximates ∫ f(x) dx / (freqs[-1] - freqs[0]), consistent with
+    the trapezoidal rule used elsewhere (compute_bulk_params, compute_shape)
+    for spectral moments.
 
     Parameters
     ----------
@@ -92,10 +89,10 @@ def compute_shape(density_batch, freqs, m0_threshold=1e-12):
     """
     Normalize a batch of spectra to unit-area shape: shape(f) = E(f) / m0.
 
-    This decouples spectral shape from energy magnitude — the quantity a
+    Decouples spectral shape from energy magnitude — the quantity a
     'shape'-target model is trained to predict, paired separately with an
-    'hs'-target model that forecasts magnitude (see CLAUDE.md's discussion
-    of the shape/magnitude model split).
+    'hs'-target model that forecasts magnitude (see
+    manuscript/decisions/log/003).
 
     Parameters
     ----------

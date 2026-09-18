@@ -119,27 +119,13 @@ class SpectralWassersteinLoss(torch.nn.Module):
     """
     1-D Wasserstein-2 (quadratic earth-mover) distance between predicted
     and true spectra, treated as probability distributions over frequency —
-    an alternative to RMSELoss/SpectralSlopeLoss aimed at the same
-    multimodal blurring problem, but with a different, complementary
-    property: W2 is naturally forgiving of small position/phase shifts (a
-    peak one bin off costs a small, smoothly-scaling penalty) while still
-    penalizing "flat blur instead of two spikes" (moving mass from a spike
-    to a spread-out blob costs real transport distance, proportional to how
-    far the mass moved) — unlike a pointwise loss (RMSELoss, or
-    SpectralSlopeLoss's derivative variant), which penalizes a slightly
-    shifted sharp peak almost as harshly as a completely displaced one,
-    since a shift produces near-zero pointwise/derivative overlap at the
-    peak location.
-
-    W2 rather than W1 (this class's implementation prior to 2026-08-17):
-    W2's SQUARED transport cost penalizes one large displacement of mass
-    more harshly than several small ones moving the same total distance
-    (quadratic vs. linear in distance), which better matches the failure
-    mode motivating this loss in the first place — a peak fully misplaced
-    to a distant frequency should cost disproportionately more than the
-    same peak merely broadening into its immediate neighbourhood — whereas
-    W1's linear cost treats "one peak moved far" and "many small local
-    shifts summing to the same total distance" as interchangeable.
+    an alternative to RMSELoss aimed at the multimodal-blurring problem
+    (a pointwise loss penalizes a slightly shifted sharp peak almost as
+    harshly as a fully displaced one). W2's squared transport cost
+    penalizes one large displacement more harshly than several small ones
+    moving the same total distance; see manuscript/decisions/log/020 and
+    024 for why W2 rather than the simpler W1, and for what changed when
+    this class was switched from one to the other.
 
     For 1-D distributions, W1 has a convenient exact shortcut — the L1
     distance between CDFs, ∫|CDF_pred(f)-CDF_true(f)| df — but this

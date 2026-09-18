@@ -127,9 +127,10 @@ def main():
             continue
 
         print(f"[{phase}] loading checkpoint and running inference on the test set...")
-        # map_location='cpu': FreqDimEmbedding builds a fixed sinusoidal
-        # buffer from `freqs` at construction time (before .to(device)) —
-        # see scripts/evaluate_ablation_phases.py's identical fix/comment.
+        # map_location='cpu' is required, not stylistic: FreqDimEmbedding
+        # builds a fixed sinusoidal buffer from `freqs` at construction time,
+        # before .to(device) runs — loading straight to CUDA/MPS raises a
+        # cross-device error there.
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
         model = WaveHeightBaselineNN(
@@ -153,8 +154,8 @@ def main():
             return_arrays=True,
         )
 
-        # LOG-space for target='shape' (see nn/evaluate.py's docstring NOTE)
-        # -> exp() back to physical unit-area shape, final step only.
+        # Log-space for target='shape' (see nn/evaluate.py's docstring NOTE);
+        # exp() back to physical unit-area shape, final step only.
         pred_final_by_phase[phase] = np.exp(y_pred_all[:, -1, :].numpy())
 
         if freqs_np is None:

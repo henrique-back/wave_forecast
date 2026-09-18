@@ -14,8 +14,8 @@ def get_start_token(src, target, freqs, device, freq_means=None, shape_means=Non
 
     For the 'density' target the start token is log(E_phys) of the last
     observed spectrum — denormalised via freq_means then log-transformed
-    (floored per utils.to_log_space) — since the decoder now operates in
-    log-spectral-energy space throughout (see nn/training_loop.py).
+    (floored per utils.to_log_space), per the log-spectral-energy target
+    (manuscript/decisions/log/016).
 
     For the 'shape' target the start token is log(E(f)/m0) of the last
     observed spectrum — the unit-area shape is computed after denormalising

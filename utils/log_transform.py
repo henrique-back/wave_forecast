@@ -1,5 +1,6 @@
 import torch
 
+# Direct log-spectral-energy prediction, see manuscript/decisions/log/016.
 # Fraction of a per-frequency training-mean reference (freq_means for
 # 'density', shape_means for 'shape') used as the pre-log floor, so
 # torch.log() never sees an exact 0.0 from a genuinely calm/near-zero bin.
