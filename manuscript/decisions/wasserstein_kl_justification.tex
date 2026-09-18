@@ -1,0 +1,605 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{xcolor}
+
+\geometry{margin=2.7cm}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!50!black,
+    citecolor=blue!50!black,
+    urlcolor=blue!50!black
+}
+
+\title{\vspace{-1.5em}Justification for the Spectral Loss Design:\\
+Wasserstein, KL-Divergence, and Soft-Max Peak Height}
+\author{Wave Spectrum Forecasting with Transformers}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\section{Context and Purpose}
+
+The model under development forecasts the directional wave spectrum
+$E(f,t)$ (or its unit-area normalized form, $E(f,t)/m_0$, the \texttt{shape}
+target) over a log-spaced frequency grid of 47 bins, between 0.02 and
+0.485~Hz. Training and evaluation have so far relied on RMSE computed
+bin-by-bin between the predicted and observed spectrum. This document lays
+out the technical justification for complementing that RMSE term with three
+additional, physically motivated penalty terms — a Wasserstein-1 distance, a
+Kullback-Leibler (KL) divergence, and a differentiable soft-max peak-height
+term — all three already implemented in this project as
+\texttt{SpectralWassersteinLoss}, \texttt{SpectralKLDivergenceLoss}, and
+\texttt{SoftPeakHeightLoss} (\texttt{utils/loss.py}) — and situates that
+choice relative to how these mechanisms are already used in analogous
+domains of spectral/distributional comparison and differentiable extremum
+localization (audio, EEG, image retrieval, non-negative matrix
+factorization, human pose estimation).
+
+\section{Why RMSE Is a Poor Metric for Spectral Evaluation}
+\label{sec:rmse-problem}
+
+RMSE between two spectra is defined bin by bin:
+\begin{equation}
+\text{RMSE}(E_{\text{pred}}, E_{\text{true}}) =
+\sqrt{\frac{1}{N}\sum_{i=1}^{N}\big(E_{\text{pred}}(f_i) - E_{\text{true}}(f_i)\big)^2}.
+\end{equation}
+This formulation treats each frequency bin as an independent, interchangeable
+coordinate: the error between $f_i$ and $f_{i+1}$ is computed exactly the
+same way as the error between $f_i$ and $f_{40}$. The frequency axis — which
+has real, non-uniform, log-spaced geometry — is invisible to the metric.
+This produces three concrete problems for a wave spectrum:
+
+\begin{enumerate}[leftmargin=1.4em]
+\item \textbf{No notion of proximity between bins.} A peak predicted one bin
+off (a small, physically minor phase/position error) is penalized comparably
+to a peak that vanishes entirely or appears in a completely wrong frequency
+band (a physically severe energy/modality error). RMSE cannot distinguish
+these because there is no cost for \emph{moving} energy mass from one bin to
+its neighbor — only a cost for it being in the right place or not.
+
+\item \textbf{Structural bias toward smoothed spectra.} When there is
+genuine uncertainty about the exact position of the spectral peak across
+training samples (normal in ocean waves — the peak frequency $f_p$ drifts
+hour to hour), the estimator that minimizes mean squared error is not "predict
+the most likely peak" but the \emph{average} of several narrow spectra
+slightly shifted relative to one another. That average is broader and lower
+than any individual sample. This is the same mechanism, well documented,
+behind blur in image-generation models trained with pixelwise $L_2$/MSE loss.
+
+\item \textbf{Insensitivity to modality errors.} In mixed sea states
+(wind sea + swell), the spectrum is bimodal or trimodal. A whole-spectrum
+RMSE dilutes exactly the error type that matters physically: getting total
+energy right while misplacing the relative amplitude or position of the two
+peaks, or collapsing two separate peaks into one.
+\end{enumerate}
+
+In short: RMSE is well suited to \emph{magnitude} accuracy per bin, but blind
+to \emph{shape} and \emph{position} — precisely what matters most in a wave
+spectrum, since total energy (proportional to $H_s^2$) is already tracked
+separately by the bulk-parameter metrics (\texttt{Hs\_RMSE},
+\texttt{Tm02\_RMSE}) already computed in this pipeline.
+
+\section{The Wasserstein Distance as a Correction}
+\label{sec:wasserstein}
+
+The Wasserstein distance treats each spectrum (normalized to unit area,
+exactly what \texttt{compute\_shape} produces) as a probability distribution
+over frequency, rather than a vector of independent coordinates. For two
+distributions $\mu,\nu$ over the same metric space:
+\begin{equation}
+W_p(\mu,\nu) = \left(\inf_{\gamma \in \Pi(\mu,\nu)}
+\int |f-g|^p \, d\gamma(f,g)\right)^{1/p},
+\end{equation}
+where $\Pi(\mu,\nu)$ ranges over all transport plans moving the mass of
+$\mu$ onto $\nu$. Intuitively, $W_p$ is the minimal cost of physically
+moving energy from one part of the spectrum to another, where moving one
+unit of mass a given distance costs proportionally to that distance.
+
+For one-dimensional distributions — exactly the case here, $E(f)/m_0$ over
+the frequency grid — $W_1$ has a closed form via cumulative distribution
+functions (CDFs):
+\begin{equation}
+W_1(\mu,\nu) = \int_{0}^{\infty} \big| F_\mu(f) - F_\nu(f) \big| \, df,
+\end{equation}
+which is exactly what \texttt{SpectralWassersteinLoss} computes
+(via a discrete cumulative-trapezoid integral over the true grid).
+
+This directly resolves the three problems from Section~\ref{sec:rmse-problem}:
+a shifted peak costs little (proportional to how far it moved), an
+optimum under $W_1$ does not collapse to a blurred average the way an
+$L_2$-minimizing optimum does (translated copies of the same sharp bump
+have a non-blurred Wasserstein barycenter), and a modality error (mass moved
+from one peak to a distant one) is directly and heavily penalized because
+the transported distance is large.
+
+\section{Why Combine RMSE with a Wasserstein Penalty}
+\label{sec:hybrid}
+
+The implemented approach does not replace RMSE — it composes:
+\begin{equation}
+\mathcal{L} = \text{RMSE}\big(E_{\text{pred}}, E_{\text{true}}\big)
+\;+\; \lambda_W \cdot W_1\big(\hat P_{\text{pred}}, \hat P_{\text{true}}\big),
+\qquad \hat P = E/m_0.
+\end{equation}
+
+Reasons to keep RMSE as the primary term rather than training on $W_1$ alone:
+
+\begin{enumerate}[leftmargin=1.4em]
+\item \textbf{Per-bin magnitude fidelity still matters.} $H_s = 4\sqrt{m_0}$
+and $T_{m02}$ are computed by direct integration of the spectrum; those
+integrals depend on point-wise magnitude, not only on the relative shape or
+position of energy mass. RMSE anchors that component.
+\item \textbf{$W_1$ is defined on normalized distributions.} By
+construction it measures \emph{shape} error, not total energy — comparing
+two unit-mass distributions discards scale information. This is desirable
+as a complementary term, but it cannot be the sole loss for a target that
+also needs absolute-magnitude accuracy.
+\item \textbf{Training stability.} RMSE is smooth, strictly convex around
+the target, and well-behaved from the start of training, when predictions
+are still far from the target distribution.
+\item \textbf{$\lambda_W$ exposes the trade-off explicitly}, tunable via
+validation, between bin-wise fidelity and shape/position fidelity.
+\end{enumerate}
+
+\section{A Remaining Gap: Physically-Weighted Local Errors}
+\label{sec:gap}
+
+RMSE and $W_1$ together still share one blind spot. Both treat every
+frequency bin as equally important \emph{in isolation}: RMSE (computed in
+log-space, on $\log E(f)$ or $\log(E(f)/m_0)$, floored near zero to avoid
+$\log(0)$) assigns the same weight to a bin crossing that near-zero floor
+regardless of whether that bin is the spectral peak or an inconsequential
+tail bin; $W_1$'s transport cost depends only on how far mass moved, not on
+how physically important the bin it moved from or to actually is.
+
+This matters because the bulk parameters that ultimately matter —
+$H_s$, $T_{m02}$ — come from integrals ($m_0=\int E\,df$,
+$m_2=\int f^2E\,df$) that are dominated by the region around the spectral
+peak. A log-space error at a near-zero tail bin contributes almost nothing
+to these integrals; the identical log-space error at the peak can
+substantially distort them. Neither RMSE nor $W_1$, as currently combined,
+makes this distinction explicit — a further term is needed that weights
+each bin's error in proportion to how much of the spectrum's actual energy
+that bin represents.
+
+\section{KL Divergence as a Physically-Weighted Penalty}
+\label{sec:kl}
+
+\subsection{Definition and Derivation}
+
+Since $\hat P = E/m_0$ is already, by construction, a non-negative,
+unit-area probability distribution over frequency, the standard
+information-theoretic measure of divergence between two distributions
+applies directly — the Kullback-Leibler divergence:
+\begin{equation}
+D_{KL}(P\,\|\,Q) = \sum_i P(f_i)\,\log\frac{P(f_i)}{Q(f_i)}.
+\end{equation}
+Expanding the logarithm, $\log\frac{P(f_i)}{Q(f_i)} = \log P(f_i) - \log
+Q(f_i)$ (no extraneous sign), and writing $\epsilon_i = \log P(f_i) - \log
+Q(f_i)$ for the per-bin \emph{log-space error} — the same log-space
+representation the model already predicts and trains in:
+\begin{equation}
+D_{KL}(P\,\|\,Q) = \sum_i P(f_i)\cdot \epsilon_i.
+\end{equation}
+Since $\sum_i P(f_i) = 1$, this is exactly a \textbf{$P$-weighted average}
+of the per-bin log-space errors — the weight on bin $i$ is $P(i)$, the
+fraction of the true spectrum's total energy actually located there.
+Contrast with the plain log-space MSE currently used as the main per-bin
+loss:
+\begin{equation}
+\mathcal{L}_{\text{MSE-log}} = \frac{1}{N}\sum_i \epsilon_i^2,
+\end{equation}
+where every bin carries the same weight, $1/N$, independent of position.
+
+\subsection{Non-Negativity and Relationship to Cross-Entropy}
+
+Individual terms $P(f_i)\cdot\epsilon_i$ can carry either sign — positive
+where $Q$ underestimates $P$, negative where $Q$ overestimates it — but the
+weighted sum is always non-negative, with equality if and only if $P=Q$
+everywhere (Gibbs' inequality, a direct consequence of the concavity of
+$\log$). This guarantees $D_{KL}$ behaves as a proper training penalty,
+bounded below by zero. It is worth stating explicitly because expanding the
+logarithm the wrong way — introducing a spurious overall minus sign — yields
+$-D_{KL}(P\|Q)$, which is non-positive and would, if minimized, reward the
+optimizer for making the prediction worse rather than better; this is a
+one-symbol error easy enough to make that it is worth flagging as a check
+on the final implementation, not just the derivation.
+
+$D_{KL}$ is closely related to the cross-entropy $H(P,Q) =
+-\sum_i P(f_i)\log Q(f_i)$:
+\begin{equation}
+D_{KL}(P\,\|\,Q) = H(P,Q) - H(P),
+\end{equation}
+where $H(P)$ is $P$'s own Shannon entropy. Since $H(P)$ does not depend on
+the prediction $Q$, $D_{KL}$ and $H(P,Q)$ produce \emph{identical gradients}
+with respect to the predicted spectrum — this is exactly the log-softmax
+cross-entropy mechanism used in classification, applied over the frequency
+axis instead of over class labels, and it means the choice between the two
+is not a training-behavior decision. $D_{KL}$ is preferred here purely for
+interpretability of the reported value: it is exactly zero at a perfect
+prediction, whereas plain cross-entropy floors at $H(P)$, a nonzero,
+sample-dependent value that makes "how close to perfect" harder to read
+off the raw loss.
+
+\subsection{Physical Interpretation for Bulk Wave Parameters}
+
+For the \texttt{shape} target, $P(f_i) = \big(E(f_i)/m_0\big)\cdot\Delta f_i$
+is precisely the fraction of total wave energy carried by bin $i$. Any
+per-frequency log-space error is scaled by exactly how much of the
+spectrum's energy that bin represents: a tail bin (small $P(f_i)$)
+contributes almost nothing to $D_{KL}$ even if its log-space error is large,
+while the same error at the spectral peak (large $P(f_i)$) is weighted
+heavily. This is not an arbitrary or hand-tuned weighting scheme — it falls
+directly out of treating the spectrum as a probability distribution, and it
+reproduces exactly the priority that $H_s$ and $T_{m02}$ already have
+physically, since both are dominated by the low-order moments of the
+energy-dense region around the peak.
+
+The resulting composite loss:
+\begin{equation}
+\mathcal{L} = \text{RMSE}\big(E_{\text{pred}}, E_{\text{true}}\big)
+\;+\; \lambda_W \cdot W_1\big(\hat P_{\text{pred}}, \hat P_{\text{true}}\big)
+\;+\; \lambda_{KL} \cdot D_{KL}\big(\hat P_{\text{true}}\,\|\,\hat P_{\text{pred}}\big)
+\end{equation}
+gives each term ownership of a distinct failure mode: RMSE anchors absolute
+per-bin magnitude (needed for $H_s$/$T_{m02}$ integration fidelity); $W_1$
+penalizes energy transported across the frequency axis, including between
+distant spectral modes, in proportion to distance moved; $D_{KL}$ penalizes
+per-bin log-space error in proportion to physical importance, correcting
+the one blind spot RMSE and $W_1$ share (Section~\ref{sec:gap}) without
+reintroducing either of their own.
+
+\section{A Further Gap: Local Peak Sharpness}
+\label{sec:gap2}
+
+Even with $D_{KL}$ added, RMSE, $W_1$, and $D_{KL}$ together still share one
+remaining blind spot: none of them supplies a gradient signal specifically
+anchored to whether a detected spectral peak \emph{retains its own
+amplitude}. $W_1$'s transport cost is proportional to how far energy moves,
+not to how much a peak's own height changes — redistributing mass from a
+peak bin into its two immediate neighbors is geometrically cheap (mass moves
+only one or two bins) even though it can collapse the peak's amplitude by a
+large fraction. $D_{KL}$, as noted in \texttt{SpectralKLDivergenceLoss}'s
+own documentation, is dominated by whatever probability the prediction
+assigns exactly at the bins where the true distribution concentrates its
+mass — this makes it \emph{decline to pile on} for a moderately broadened
+peak the way an unweighted MSE would, but it supplies no positive, targeted
+gradient pressure to restore the peak's amplitude once it has partially
+collapsed; it merely penalizes the collapse less harshly than MSE, rather
+than correcting it. Neither mechanism, individually or combined, behaves
+like a term whose purpose is specifically "does the peak's height survive."
+
+This matters physically because spectral bandwidth and peakedness — closely
+tied to $T_{m02}$ and to distinguishing a narrow, long-travelled swell
+partition from a broader, locally generated wind-sea partition — depend on
+whether the peak itself stays sharp, not merely on whether energy remains
+somewhere in its general neighborhood.
+
+\section{Soft-Max Peak Height as a Fourth Penalty Term}
+\label{sec:softmax}
+
+\subsection{From Hard Maximum to a Differentiable Relaxation}
+
+Within a window $\mathcal{W}_k$ around a detected peak $k$, the natural
+summary of "the peak's height" is $\max_{i\in\mathcal{W}_k} E(f_i)$. As a
+training signal this is unusable: its gradient is exactly zero at every bin
+except the single arg-max bin, and that bin can flip discontinuously between
+optimization steps. Replacing the hard maximum with a temperature-controlled
+soft-max recovers a smooth, everywhere-differentiable surrogate:
+\begin{equation}
+\sigma_k(i;\tau) = \frac{\exp\big(E(f_i)/\tau\big)}
+{\sum_{j\in\mathcal{W}_k}\exp\big(E(f_j)/\tau\big)}, \qquad
+H_k^{\text{pred}}(\tau) = \sum_{i\in\mathcal{W}_k} E_{\text{pred}}(f_i)\,\sigma_k(i;\tau).
+\end{equation}
+As $\tau\to\infty$, $\sigma_k\to$ uniform and $H_k^{\text{pred}}\to$ the
+window's plain mean; as $\tau\to0$, $\sigma_k\to$ one-hot at the arg-max and
+$H_k^{\text{pred}}\to\max$. For any finite $\tau>0$ every bin in the window
+receives nonzero, informative gradient, weighted by its own current
+soft-max confidence.
+
+\subsection{Windows from the Existing Partition Detector}
+
+$\mathcal{W}_k$ is taken directly from the trough-to-trough partition
+boundaries already computed by this project's Portilla et al. (2009)
+significant-peak detector (\texttt{find\_significant\_peaks}), exposed for
+this purpose by a new \texttt{find\_peak\_windows} helper in
+\texttt{utils/spectral\_partitioning.py} — narrow for a narrow swell
+partition, wide for a broad wind-sea partition, rather than an arbitrary
+fixed bin-radius that would necessarily be wrong for one of the two regimes.
+
+\subsection{Calibrating the Temperature}
+
+A window's width alone is not a safe basis for $\tau_k$, for two reasons.
+First, the buoy's frequency grid is log-spaced and non-uniform (bins
+0.005~Hz wide below 0.1~Hz, 0.02~Hz wide above 0.365~Hz), so the number of
+bins in a partition is not a reliable proxy for its physical bandwidth — the
+window width must be measured as $\Delta f_k = f(r_k)-f(\ell_k)$ in Hz, not
+as a bin count. Second, $\exp(E_i/\tau)$ is only numerically and
+conceptually meaningful when $\tau$ is expressed in $E$'s own units
+(spectral density), not in frequency's — a temperature calibrated purely
+from bandwidth would make the soft-max's sharpness swing arbitrarily between
+a calm-sea sample and a storm sample with an identically \emph{shaped}
+partition, since $E$'s absolute scale carries no relation to a window's
+width in Hz. Combining both corrections, the temperature used is a fixed
+fraction of the peak's own (label-side) height, modulated by that peak's
+bandwidth relative to the grid's total span:
+\begin{equation}
+\tau_k = \max\!\left(\tau_{\min},\; c \cdot H_k^{\text{true}} \cdot
+\frac{f(r_k)-f(\ell_k)}{f_N-f_1}\right),
+\end{equation}
+so a narrow swell partition gets a small, near-hard-max temperature, and a
+broad wind-sea partition gets a larger, softer one — matching the physical
+fact that a broad wind-sea peak genuinely does not have as sharply defined a
+height as a narrow swell peak. $H_k^{\text{true}}$ is drawn only from the
+label, exactly as the window detection itself already is, so this is not a
+train/inference information leak.
+
+\subsection{Loss Definition}
+
+On the label side a hard maximum is used directly (no gradient is needed
+there): $H_k^{\text{true}} = \max_{i\in\mathcal{W}_k} E_{\text{true}}(f_i)$.
+The per-peak, then per-sample, loss is
+\begin{equation}
+\mathcal{L}_{\text{peak},k} = \big(H_k^{\text{pred}}(\tau_k) -
+H_k^{\text{true}}\big)^2, \qquad
+\mathcal{L}_{\text{peak}} = \frac{1}{K}\sum_{k=1}^K \mathcal{L}_{\text{peak},k},
+\end{equation}
+averaged over a sample's $K$ detected peaks (samples with $K=0$ are excluded
+from the batch average rather than contributing a filled-in zero, the same
+convention already used for undefined-quantity samples via
+\texttt{M0\_MASK\_THRESHOLD} in \texttt{nn/evaluate.py}). Adding this term
+gives the composite loss its fourth and final component:
+\begin{equation}
+\mathcal{L} = \text{RMSE}\big(E_{\text{pred}}, E_{\text{true}}\big)
+\;+\; \lambda_W\, W_1\big(\hat P_{\text{pred}}, \hat P_{\text{true}}\big)
+\;+\; \lambda_{KL}\, D_{KL}\big(\hat P_{\text{true}}\,\|\,\hat P_{\text{pred}}\big)
+\;+\; \lambda_{\text{peak}}\, \mathcal{L}_{\text{peak}}.
+\end{equation}
+$\mathcal{L}_{\text{peak}}$ is implemented and unit-tested as
+\texttt{SoftPeakHeightLoss} in \texttt{utils/loss.py}, together with
+\texttt{find\_peak\_windows} in \texttt{utils/spectral\_partitioning.py};
+neither is yet wired into the training loop's hyperparameter search (the
+weight $\lambda_{\text{peak}}$ is not yet an Optuna-tuned parameter), pending
+the same promotion path already followed by
+\texttt{SpectralWassersteinLoss} and \texttt{SpectralKLDivergenceLoss}.
+
+\section{Wasserstein, KL Divergence, and Soft-Max Localization in Analogous Fields}
+\label{sec:literature}
+
+All three mechanisms are well established in other domains, for the same
+underlying reason: point-wise metrics ignore the geometry or relative
+importance of the axis being compared, and a hard extremum operator (max/
+arg-max) carries no usable gradient at all — each of the three corrections
+addresses one of these structural gaps.
+
+\subsection{Wasserstein Distance}
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Image retrieval.} Rubner, Tomasi, and
+Guibas~\cite{rubner2000} introduced the Earth Mover's Distance as a
+similarity metric between image color histograms precisely because
+bin-wise $L_1$/$L_2$ distances penalize a color shift between adjacent bins
+as heavily as an unrelated color change.
+\item \textbf{Audio and music.} Logan and
+Salomon~\cite{logan2001} compared musical timbre similarity by representing
+each track's spectrum as a Gaussian mixture and comparing mixtures via
+Earth Mover's Distance, since a direct Euclidean spectral comparison fails
+when the relevant spectral content is concentrated in slightly shifted
+frequency regions.
+\item \textbf{Biomedical signals / EEG.} Cazelles, Robert, and
+Tobar~\cite{cazelles2021} define the ``Wasserstein--Fourier distance''
+directly between power spectral densities of stationary time series —
+essentially the same problem addressed here, treating the normalized PSD as
+a probability distribution over frequency.
+\item \textbf{Signal processing, broadly.} Kolouri et
+al.~\cite{kolouri2017} survey optimal-transport/Wasserstein methods across
+signal processing and machine learning, including spectral and waveform
+comparison.
+\item \textbf{Deep generative models.} Arjovsky, Chintala, and
+Bottou~\cite{arjovsky2017}, in proposing the Wasserstein GAN, show formally
+that the Wasserstein distance stays continuous and gradient-informative even
+when two distributions have non-overlapping support — directly relevant to
+narrow, poorly aligned spectral peaks. Efficient computation is discussed by
+Cuturi~\cite{cuturi2013} (Sinkhorn distances) and Peyré and
+Cuturi~\cite{peyre2019} (a general computational optimal transport
+reference), with a practical implementation available in
+POT~\cite{flamary2021}.
+\end{itemize}
+
+\subsection{KL Divergence and Weighted Spectral Divergences}
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Information theory foundations.} The divergence itself is due
+to Kullback and Leibler~\cite{kullback1951}; its role as the natural
+divergence underlying cross-entropy, and its relationship $D_{KL}=H(P,Q)-H(P)$,
+is standard material in information theory~\cite{cover2006} and is the same
+mechanism underlying cross-entropy loss in classifier training in
+general~\cite{goodfellow2016}.
+\item \textbf{Audio spectrogram factorization.} Lee and
+Seung~\cite{lee2001} introduce a generalized KL-divergence cost function for
+non-negative matrix factorization, alongside the Euclidean one, precisely
+because it better respects the multiplicative, magnitude-sensitive structure
+of non-negative spectral data than a squared-error cost — the same
+motivation as Section~\ref{sec:gap}. Févotte, Bertin, and
+Durrieu~\cite{fevotte2009} extend this line of work with the closely related
+Itakura-Saito divergence for music spectrogram factorization, again choosing
+a divergence family that weights spectral errors by magnitude/importance
+rather than treating every bin uniformly, for the same physical reason
+argued here: a fixed absolute error matters far more where the signal
+carries real energy than where it does not.
+\end{itemize}
+
+\subsection{Differentiable Soft-Max Localization}
+
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Human pose estimation.} Sun et
+al.~\cite{sun2018} replace the standard, non-differentiable arg-max
+decoding of a heatmap-based keypoint detector with an "integral regression"
+that computes the joint coordinate as a soft-max-weighted expectation over
+the heatmap, precisely to obtain an end-to-end differentiable localization
+signal — the same replacement of max/arg-max by a soft-max-weighted average
+used here for spectral peak height.
+\item \textbf{Discrete relaxation, more generally.} Jang, Gu, and
+Poole~\cite{jang2017} formalize the general principle that a temperature-
+controlled soft-max is a continuous relaxation of a discrete arg-max
+decision, recovering the hard decision as temperature $\to 0$ and a smooth,
+fully differentiable surrogate for any finite temperature — exactly the two
+limits (mean / hard-max) that $\tau_k$ interpolates between here.
+\item \textbf{Attention as soft-max pooling.} Vaswani et
+al.~\cite{vaswani2017} popularize soft-max-weighted pooling as the core
+mechanism of attention; this project's own encoder already uses the same
+mechanism to collapse a spectrum's frequency bins into one embedding
+(\texttt{\_FreqAttentionPool}, \texttt{nn/freq\_embedding.py}) — the
+soft-max peak-height loss applies the identical mechanism as a loss term
+rather than as a model layer.
+\end{itemize}
+
+The recurring pattern across these domains — image histograms, audio
+spectra, EEG power spectral densities, non-negative spectrogram
+factorization, heatmap-based keypoint localization — is the same one
+motivating this project's loss design: when the compared object is
+fundamentally a \emph{distribution of mass over a structured, physically
+meaningful axis} rather than a vector of independent coordinates, the
+geometry of that axis (Wasserstein), the relative importance of each
+location on it (KL divergence), and a smooth relaxation of any hard
+extremum operator on it (soft-max) each carry information that a plain
+point-wise metric structurally cannot represent.
+
+\section{Conclusion}
+
+Bin-wise RMSE is necessary but not sufficient for evaluating wave spectra:
+it anchors physical magnitude but has no notion of frequency-axis geometry
+or of how much any given bin actually matters, producing a known bias
+toward smoothed/blurred predictions and blindness to both modality errors
+and to systematically undervaluing peak accuracy relative to the spectral
+tail. The Wasserstein distance corrects the first gap by penalizing energy
+transport in proportion to distance; the KL divergence corrects the second
+by weighting each bin's error in proportion to the physical energy it
+represents — and, as Section~\ref{sec:kl} shows, is mathematically nothing
+more than a $P$-weighted average of the same log-space errors RMSE already
+computes, unweighted. A further gap remains even so (Section~\ref{sec:gap2}):
+neither mechanism supplies targeted gradient toward restoring a peak's own
+amplitude once it has locally collapsed into its neighbors, since $W_1$'s
+cost tracks distance moved (small for a local collapse) and $D_{KL}$ only
+declines to penalize it as harshly as MSE would, rather than correcting it.
+A differentiable soft-max peak-height term (Section~\ref{sec:softmax})
+closes this gap directly, replacing the zero-gradient hard maximum with a
+temperature-controlled, everywhere-smooth relaxation whose temperature is
+itself calibrated from the peak's own physical bandwidth and energy scale.
+All three corrections are supported by extensive precedent in analogous
+domains facing the same structural problems. The resulting four-term loss
+\begin{equation*}
+\mathcal{L} = \text{RMSE} + \lambda_W\, W_1 + \lambda_{KL}\, D_{KL}
++ \lambda_{\text{peak}}\, \mathcal{L}_{\text{peak}}
+\end{equation*}
+gives each term ownership of a distinct, complementary failure mode rather
+than asking any single metric to cover all of them at once.
+\texttt{SpectralWassersteinLoss}, \texttt{SpectralKLDivergenceLoss}, and
+\texttt{SoftPeakHeightLoss} are all implemented and unit-tested in this
+project. \texttt{SpectralWassersteinLoss}'s weight is already an
+Optuna-tuned hyperparameter; \texttt{SpectralKLDivergenceLoss}'s weight is
+wired into the training loop as an opt-in term, pending a manual sweep
+before the same promotion; \texttt{SoftPeakHeightLoss} and its supporting
+\texttt{find\_peak\_windows} helper are implemented and tested in isolation
+but not yet wired into the training loop at all — that integration (
+pre-computing per-sample peak windows once, alongside \texttt{freq\_means}/
+\texttt{shape\_means}, and threading a $\lambda_{\text{peak}}$ weight
+through \texttt{train\_one\_epoch}) is the next step before this term can
+be trained against.
+
+\begin{thebibliography}{9}
+
+\bibitem{rubner2000}
+Rubner, Y., Tomasi, C., \& Guibas, L. J. (2000).
+\textit{The Earth Mover's Distance as a Metric for Image Retrieval}.
+International Journal of Computer Vision, 40(2), 99--121.
+
+\bibitem{logan2001}
+Logan, B., \& Salomon, A. (2001).
+\textit{A Music Similarity Function Based on Signal Analysis}.
+IEEE International Conference on Multimedia and Expo (ICME).
+
+\bibitem{cazelles2021}
+Cazelles, E., Robert, A., \& Tobar, F. (2021).
+\textit{The Wasserstein--Fourier Distance for Stationary Time Series}.
+IEEE Transactions on Signal Processing, 69, 709--721.
+
+\bibitem{kolouri2017}
+Kolouri, S., Park, S. R., Thorpe, M., Slep\v{c}ev, D., \& Rohde, G. K. (2017).
+\textit{Optimal Mass Transport: Signal Processing and Machine-Learning Applications}.
+IEEE Signal Processing Magazine, 34(4), 43--59.
+
+\bibitem{arjovsky2017}
+Arjovsky, M., Chintala, S., \& Bottou, L. (2017).
+\textit{Wasserstein GAN}.
+Proceedings of the 34th International Conference on Machine Learning (ICML).
+
+\bibitem{cuturi2013}
+Cuturi, M. (2013).
+\textit{Sinkhorn Distances: Lightspeed Computation of Optimal Transport}.
+Advances in Neural Information Processing Systems (NeurIPS) 26.
+
+\bibitem{peyre2019}
+Peyré, G., \& Cuturi, M. (2019).
+\textit{Computational Optimal Transport: With Applications to Data Science}.
+Foundations and Trends in Machine Learning, 11(5--6), 355--607.
+
+\bibitem{flamary2021}
+Flamary, R., Courty, N., Gramfort, A., et al. (2021).
+\textit{POT: Python Optimal Transport}.
+Journal of Machine Learning Research, 22(78), 1--8.
+
+\bibitem{kullback1951}
+Kullback, S., \& Leibler, R. A. (1951).
+\textit{On Information and Sufficiency}.
+Annals of Mathematical Statistics, 22(1), 79--86.
+
+\bibitem{cover2006}
+Cover, T. M., \& Thomas, J. A. (2006).
+\textit{Elements of Information Theory} (2nd ed.).
+Wiley.
+
+\bibitem{goodfellow2016}
+Goodfellow, I., Bengio, Y., \& Courville, A. (2016).
+\textit{Deep Learning}.
+MIT Press.
+
+\bibitem{lee2001}
+Lee, D. D., \& Seung, H. S. (2001).
+\textit{Algorithms for Non-negative Matrix Factorization}.
+Advances in Neural Information Processing Systems (NeurIPS) 13.
+
+\bibitem{fevotte2009}
+F\'{e}votte, C., Bertin, N., \& Durrieu, J.-L. (2009).
+\textit{Nonnegative Matrix Factorization with the Itakura-Saito Divergence: With Application to Music Analysis}.
+Neural Computation, 21(3), 793--830.
+
+\bibitem{sun2018}
+Sun, X., Xiao, B., Wei, F., Liang, S., \& Wei, Y. (2018).
+\textit{Integral Human Pose Regression}.
+European Conference on Computer Vision (ECCV).
+
+\bibitem{jang2017}
+Jang, E., Gu, S., \& Poole, B. (2017).
+\textit{Categorical Reparameterization with Gumbel-Softmax}.
+International Conference on Learning Representations (ICLR).
+
+\bibitem{vaswani2017}
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N.,
+Kaiser, {\L}., \& Polosukhin, I. (2017).
+\textit{Attention Is All You Need}.
+Advances in Neural Information Processing Systems (NeurIPS) 30.
+
+\end{thebibliography}
+
+\end{document}
