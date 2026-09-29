@@ -1,0 +1,71 @@
+{
+  "12": {
+    "shape_v13": {
+      "peak_fidelity_SS": 0.5597433122637809,
+      "peak_fidelity_SS_persistence": 0.4326193047040796,
+      "Shape_RMSE": 2.726245164871216,
+      "Shape_SS": -0.08768015678984131,
+      "seq_len": 12
+    },
+    "shape_v12": {
+      "peak_fidelity_SS": 0.10427502124365123,
+      "peak_fidelity_SS_persistence": 0.4326193047040796,
+      "Shape_RMSE": 2.2027487754821777,
+      "Shape_SS": 0.12117730116239755,
+      "seq_len": 12
+    },
+    "linear_baseline": {
+      "peak_fidelity_SS": 0.42823736470098134,
+      "peak_fidelity_SS_persistence": 0.4326927926335602,
+      "Shape_RMSE": 2.1774024963378906,
+      "Shape_SS": 0.13356282258881635,
+      "seq_len": 48
+    }
+  },
+  "24": {
+    "shape_v13": {
+      "peak_fidelity_SS": 0.5441450305366005,
+      "peak_fidelity_SS_persistence": 0.3103481356713834,
+      "Shape_RMSE": 2.851031541824341,
+      "Shape_SS": 0.11909599826796669,
+      "seq_len": 24
+    },
+    "shape_v12": {
+      "peak_fidelity_SS": 0.06289918159872454,
+      "peak_fidelity_SS_persistence": 0.3103481356713834,
+      "Shape_RMSE": 2.443019390106201,
+      "Shape_SS": 0.24516248751270464,
+      "seq_len": 24
+    },
+    "linear_baseline": {
+      "peak_fidelity_SS": 0.2953047285336697,
+      "peak_fidelity_SS_persistence": 0.3105078485331077,
+      "Shape_RMSE": 2.635925769805908,
+      "Shape_SS": 0.18803933647604465,
+      "seq_len": 48
+    }
+  },
+  "48": {
+    "shape_v13": {
+      "peak_fidelity_SS": 0.5083323826044275,
+      "peak_fidelity_SS_persistence": 0.1902757658748533,
+      "Shape_RMSE": 3.2475714683532715,
+      "Shape_SS": 0.1093739242157502,
+      "seq_len": 48
+    },
+    "shape_v12": {
+      "peak_fidelity_SS": 0.020095854592246887,
+      "peak_fidelity_SS_persistence": 0.1902757658748533,
+      "Shape_RMSE": 2.7074978351593018,
+      "Shape_SS": 0.2574857256813504,
+      "seq_len": 48
+    },
+    "linear_baseline": {
+      "peak_fidelity_SS": 0.052397204971368294,
+      "peak_fidelity_SS_persistence": 0.1924698859299281,
+      "Shape_RMSE": 2.7997069358825684,
+      "Shape_SS": 0.22966782258698304,
+      "seq_len": 12
+    }
+  }
+}

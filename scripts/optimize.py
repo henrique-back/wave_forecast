@@ -242,12 +242,33 @@ for lead_time_hours in lead_times_hours:
         pruner=pruner,
     )
 
-    study.optimize(
-        objective_fn,
-        n_trials=n_trials,
-        callbacks=[lambda study, trial: save_progress(study, trial, results_folder)],
-        catch=(torch.OutOfMemoryError,),
-    )
+    # n_trials is a total budget, not a per-invocation one: each Slurm job
+    # (slurm/optimize_v13_lead*.slurm) resumes the same on-disk study via
+    # load_if_exists=True above, and a study.optimize(n_trials=n_trials)
+    # call has no memory of trials a PRIOR invocation already ran — every
+    # resubmit (e.g. after a 48h Slurm --time timeout, which every v13 lead
+    # has hit at least once) would otherwise add n_trials MORE on top,
+    # indefinitely, regardless of how many already exist. len(study.trials)
+    # includes stale RUNNING rows left behind by a killed job (not just
+    # COMPLETE/PRUNED) deliberately — those already consumed a trial slot
+    # and won't resolve into one, so counting only finished states would
+    # keep re-granting their budget back on every resubmit.
+    remaining_trials = max(0, n_trials - len(study.trials))
+    if remaining_trials == 0:
+        print(f"Study {study_name!r} already has {len(study.trials)} trials "
+              f">= n_trials={n_trials} — skipping study.optimize(), budget spent.")
+    else:
+        print(f"Study {study_name!r} has {len(study.trials)} trials — "
+              f"running {remaining_trials} more toward the {n_trials} budget.")
+        study.optimize(
+            objective_fn,
+            n_trials=remaining_trials,
+            callbacks=[lambda study, trial: save_progress(study, trial, results_folder)],
+            # A single trial hitting CUDA OOM (e.g. a large batch_size /
+            # lead_time / embed_dim combination) must not take down the
+            # whole multi-hour study — mark it failed and keep going.
+            catch=(torch.OutOfMemoryError,),
+        )
     print("Best trial:")
     print(study.best_trial.params)
     print("Validation loss:", study.best_value)
