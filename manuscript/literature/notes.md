@@ -16,7 +16,7 @@ none are from training-data recall (see `../CLAUDE.md` §3).
 
 | Key | Title (short) | Year | Relevance | In `refs.bib`? |
 |---|---|---|---|---|
-| [makarynskyy2004](notes/makarynskyy2004.md) | ANN-corrected numerical wave forecasts | 2004 | High | Yes |
+| [makarynskyy2004](notes/makarynskyy2004.md) | ANN Hs/Tz forecasts from a buoy's own record, plus ANN correction (no numerical model — corrected 2026-09-29) | 2004 | High | Yes |
 | [fisher2021sparse](notes/fisher2021sparse.md) | Sparse buoy array, phase-resolved prediction | 2021 | Medium | Yes |
 | [hwang2024decnn](notes/hwang2024decnn.md) | DeCNN spectrum reconstruction, KL loss | 2024 | High | Yes |
 | [sun2025gpgnn](notes/sun2025gpgnn.md) | G-PGNN physics-guided generative NN | 2025 | High | Yes |
@@ -87,7 +87,8 @@ Four further references sourced the same day for the Introduction's three remain
 claims — the data-driven-vs-NWP state of play, standard spectral verification practice, and
 precedent for the shape/magnitude decomposition. All Crossref-verified; PDFs are in
 `literature/`. **Read the version caveats in each note before quoting**: three of the PDFs are
-arXiv preprints of the published article cited in `refs.bib`, and the Bidlot PDF is partial.
+arXiv preprints of the published article cited in `refs.bib`. (The Bidlot PDF was logged here as
+partial; a 2026-09-29 re-check found it complete, all 24 pages — see its note.)
 
 | Key | Title (short) | Year | Relevance | In `refs.bib`? |
 |---|---|---|---|---|
@@ -150,23 +151,27 @@ directional* peaks.
 |---|---|---|---|---|
 | [gorman2018](notes/gorman2018.md) | Buoy directional spectra beyond the "first five" moments; >2 directional peaks | 2018 | Medium-High | Yes (abstract-level only — see note) |
 
-### Web-only — no local PDF, found 2026-09-29 (find-reference, physical-model comparison)
+### Local PDF obtained 2026-09-29 (find-reference, physical-model comparison)
 
 Found during the 2026-09-29 search for published verification of numerical-model spectral
-forecasts, to compare the manuscript's forecasts against. Crossref confirmed the metadata and
-supplied the abstract. The article is open access (CC BY-NC 4.0), but Wiley blocks automated
-download, so it is **verified at abstract level**. The lead-time error table in its note comes from
-the authors' Zenodo code snapshot (doi:10.5281/zenodo.22557273). That snapshot predates the
-published text, and its ML numbers differ slightly from the abstract's.
+forecasts, to compare the manuscript's forecasts against. It was first filed the same day at
+abstract level: metadata came from Crossref and numbers from the authors' Zenodo code snapshot
+(doi:10.5281/zenodo.22557273). The author then supplied the published PDF, which has been **read in
+full**, and its note was rewritten from it.
+- The snapshot's ECMWF numbers match the paper's Table 2 exactly.
+- Its ML numbers and its test period do not. The paper tests January–October 2023, not the whole
+  of 2023.
+- The note uses the paper's values throughout.
 
-Two points in the note matter most. First, it **narrows the Introduction's layer-2 gap**: it is a
-learned 1D-spectrum forecast at a buoy, as post-processing of the ECMWF forecast (see "The gap this
-corpus does not fill" below). Second, its finding that buoy history was *not* selected as an input
-comes from the snapshot docs only.
+Two points in the note matter most.
+1. It **narrows the Introduction's layer-2 gap**. It is a learned 1D-spectrum forecast at a buoy,
+   made as post-processing of the ECMWF forecast (see "The gap this corpus does not fill" below).
+2. Its buoy-history finding is **confirmed and stronger than first logged**. Buoy history was
+   explicitly rejected because it *degraded* skill (§4.1, §5.2.3).
 
 | Key | Title (short) | Year | Relevance | In `refs.bib`? |
 |---|---|---|---|---|
-| [filoche2026postprocessing](notes/filoche2026postprocessing.md) | DL post-processing of the ECMWF spectral forecast to a buoy's 1D spectrum, 5-day leads, NW Australia | 2026 | High | Yes (abstract-level only — see note) |
+| [filoche2026postprocessing](notes/filoche2026postprocessing.md) | DL post-processing of the ECMWF spectral forecast to a buoy's 1D spectrum, 5-day leads, NW Australia | 2026 | High | Yes |
 
 ### Web-only comparators — no local PDF
 
@@ -180,7 +185,7 @@ comparators" below for what each is closest-analog to.
 |---|---|---|---|---|
 | [meng2023windswell](notes/meng2023windswell.md) | Wind-sea/swell separation by deep learning | 2023 | Medium-High | Yes (no DOI) |
 | [breunung2023dmd](notes/breunung2023dmd.md) | DMD as the forecasting mechanism itself | 2023 | Medium | Yes (no DOI) |
-| [rogers2025espc](notes/rogers2025espc.md) | Navy ESPC partition-conditioned skill assessment | 2025 | Medium | Yes (no DOI) |
+| [rogers2025espc](notes/rogers2025espc.md) | Navy ESPC wave-forecast skill by frequency band (vs satellite) and sea/swell height (vs own analyses) — full text read 2026-09-29 | 2025 | Medium | Yes (no DOI) |
 
 Standard method/tooling and wave-physics-background citations (no local PDF, all confirmed via
 websearch 2026-09-18): `vaswani2017attention`, `loshchilov2019adamw`,
@@ -207,10 +212,11 @@ panel. Closest analogs and where each falls short:
   direction (params→shape via classical/ANN regression), not a learned forecast pair recombined
   at inference.
 - **filoche2026postprocessing** (added 2026-09-29) — a learned forecast of the buoy-measured 1D
-  spectrum, from 3 h out to 5 days, with an attention-based encoder-decoder. It is the closest
-  analog found for "ML forecasting the spectrum at a buoy". But it post-processes the ECMWF
-  operational spectral forecast, with the numerical-model spectrum as input, rather than
-  forecasting from the buoy's own history. Its swell/wind-sea split is a fixed 0.10 Hz cut.
+  spectrum, from 3 h out to 5 days. It uses a 3D-CNN encoder-decoder with convolutional attention
+  modules and FiLM context conditioning; it is not a transformer. It is the closest analog found
+  for "ML forecasting the spectrum at a buoy". But it post-processes the ECMWF operational spectral
+  forecast, with the numerical-model spectrum as input, rather than forecasting from the buoy's
+  own history. Its swell/wind-sea split is a hard 0.1 Hz cut.
 
 ### One further narrowing, 2026-09-29 — the layer-2 "none forecast the spectrum" claim
 
@@ -220,9 +226,13 @@ forecast the full spectrum") therefore needs qualifying. What survives is this: 
 found forecasts the spectrum from a station's own history, without a numerical forecast as input.
 `01_introduction.tex` already ends its spectrum paragraph on that narrower claim, so it holds. The
 paragraph's list of prior "lines" of spectral work (estimation; spatial prediction from forcing)
-would be more complete with post-processing added as a third. Separately, their hyperparameter
-search did not select buoy history as an input. A reviewer may put this to the manuscript; it is
-sourced from the snapshot docs only, so check it in the full text before engaging with it.
+would be more complete with post-processing added as a third.
+
+Separately, their search rejected buoy history as an input because it degraded skill (confirmed
+in the full text, §4.1 and §5.2.3). A reviewer may put this to the manuscript. The authors blame
+their own architecture, not the information content, and their setting already includes the
+numerical forecast. Answer on those two points; do not claim they showed buoy history has no
+skill. `../CLAUDE.md` §0.3 and §0.5 were updated for this on 2026-09-29.
 
 ### Two component claims narrowed on 2026-09-23 — do not overclaim these
 
@@ -269,9 +279,13 @@ be located (never guessed). Full notes at the links below.
   downstream model, which is what this project does. Closest DMD-adjacent precedent found; the
   auxiliary-feature framing itself remains unmatched.
 - **[rogers2025espc](notes/rogers2025espc.md)** — Rogers & Janiga (2025), NRL Memorandum Report /
-  arXiv:2510.06484. A *numerical* (physics-based) wave-model skill assessment that stratifies
-  verification by wind-sea/swell fraction — closest match for "partition-conditioned skill
-  scoring," but for a conventional NWP-coupled wave model, not an ML model.
+  arXiv:2510.06484. A *numerical* (physics-based) wave-model skill assessment of long-range
+  forecasts. It scores energy in four fixed frequency bands against satellite (SWIM) spectra, and
+  swell and wind-sea heights against the model's own analyses. **Corrected 2026-09-29 from the
+  full text:** it does *not* stratify verification by wind-sea fraction, and its sea/swell split is
+  the model's internal wind-sea criterion, never checked against observations. It is not an ML
+  model, and it is weaker as a partition-conditioned analog than first logged; `hanson2009pacific`
+  is the real precedent.
 
 **Two claims came back as clean, uncontested gaps** (no closer prior art found either locally or
 via websearch): (1) Wasserstein/optimal-transport distance used as a *training-loss* term

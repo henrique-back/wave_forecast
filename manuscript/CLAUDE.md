@@ -50,12 +50,33 @@ or clipping — a small but real modelling choice, already written up in `02_met
    it as the authors' own observation. See `personal_notes.md`, "weather - numerical vs AI
    models", for the full correction and the GraphCast alternative if a stronger verb is ever
    wanted.
-2. *Within ocean forecasting, AI/ML work has stopped at scalar bulk parameters.* The lineage
-   holds from 2004 to 2026 — early ANN forecast correction (`makarynskyy2004`, Hs/Tz at 1-24h)
-   through EMD-LSTM (`zhou2021emdlstm`, Hs at 3-72h) to the most recent transformer work
-   (`kim2026metoformer`, joint scalar metocean variables) — none forecast the full spectrum. The
-   consistency of the pattern across 22 years is what makes it a real, persistent gap rather than
-   an artifact of older literature.
+2. *Within ocean forecasting, AI/ML work has concentrated overwhelmingly on scalar bulk
+   parameters.* The scalar lineage runs from 2004 to 2026, and none of its steps forecast the
+   full spectrum:
+   - early ANNs forecasting Hs/Tz from a buoy's own record at 1–24 h (`makarynskyy2004`). Its
+     "correction" networks correct the ANN's own initial forecasts, **not** a numerical model's;
+   - EMD-LSTM (`zhou2021emdlstm`, Hs at 3–72 h);
+   - the most recent transformer work (`kim2026metoformer`, joint scalar metocean variables).
+
+   The consistency of the pattern across 22 years is what makes it a real, persistent gap rather
+   than an artifact of older literature.
+
+   **Do not write that no learned model forecasts the spectrum** (updated 2026-09-29). Learned
+   spectral work exists, but it addresses different problems:
+   - estimation from bulk parameters or from platform response (`naithani2005ann`,
+     `namekar2006ann`, `sakhare2009svr`, `nielsen2023shipbuoy`, `kwon2026transformer`);
+   - spatial prediction from atmospheric forcing (`song2023jpo`, `gao2025jgr`,
+     `liu2025cnnxlstm`, `cao2025bohai`);
+   - post-processing a numerical model's spectral forecast into a buoy-consistent 1D spectrum out
+     to 5 days (`filoche2026postprocessing`).
+
+   The defensible gap is the narrower one `01_introduction.tex` already states: forecasting the
+   spectrum forward in time from a station's own recent spectral history, with no numerical-model
+   input.
+
+   Cite `zhou2021emdlstm` and `ding2023eofeemd` for the lineage only. `jiang2024comment` (its
+   ll. 248–249) names both as decomposing the signal across the train/test boundary, so their
+   error figures are not usable as comparators.
 3. *Bulk parameters are not a sufficient statistic for what the forecast is used for.* This is the
    **consequence** argument, and it must sit alongside the information argument (the spectrum is
    richer; bulk parameters are derivable from it but not the reverse) — on its own the information
@@ -94,6 +115,18 @@ or clipping — a small but real modelling choice, already written up in `02_met
    **over-smoothing is a characteristic failure mode of data-driven forecasters**, which reframes
    this from a wave-specific quirk into an instance of a documented pathology.
 
+   Two wave-domain sources back this up:
+   - `filoche2026postprocessing` (§4.2.1) is a learned spectral forecast whose authors *name the
+     mechanism*. Ensemble averaging "may also smooth narrow or highly variable wind-sea peaks",
+     and together with "the relative weighting induced by the logarithmic MAE" it may explain
+     their conservative wind-sea estimates.
+   - `minuzzi2023lstm` reports smoothing toward the mean for scalar Hs. It is already cited
+     beside `benbouallegue2024rise` in `01_introduction.tex`.
+
+   Keep the Filoche attribution as hedged as its authors keep it ("may contribute"; "the
+   contribution of each mechanism is not isolated here"). It is a stated likely cause, not a
+   measured one.
+
 ### 0.4 Answering `jiang2024comment` head-on
 
 `jiang2024comment` ("Complex models do not outperform auto-regression" for Hs time-series
@@ -111,8 +144,8 @@ whether it still holds when the target is the spectrum, and it is tested rather 
 ### 0.5 What is and is not novel — honest boundaries
 
 The overall combination remains unmatched (see `literature/notes.md`, "The gap this corpus does
-not fill"), but **two components have precedent that a 2026-09-23 search turned up, and the
-manuscript must not overclaim them**:
+not fill"). But **three components have precedent, and the manuscript must not overclaim them**.
+The first two were turned up by a 2026-09-23 search, the third by a 2026-09-29 search:
 
 - **Partition-conditioned evaluation is not new.** `hanson2009pacific` verified numerical wave
   models per wind-sea/swell partition in 2009. The defensible contribution is narrower: carrying
@@ -125,6 +158,16 @@ manuscript must not overclaim them**:
   physical m₀ = (Hs/4)² relation supplying magnitude — not the factorisation. Note too that
   non-dimensionalising spectra by Hs is routine in wave *characterisation* (JONSWAP-family
   parameterisations), so the normalisation itself is not novel either.
+- **Learned forecasting of the full spectrum at a buoy is not new, as post-processing.**
+  `filoche2026postprocessing` (2026) maps the ECMWF operational spectral forecast to a buoy's 1D
+  spectrum out to 5 days. Claim the *input setting*, not the target: the spectrum forecast from
+  the station's own history alone, with no numerical-model input.
+
+  The same paper found that 5 days of buoy history **degraded** its post-processor and was
+  rejected by its search (§4.1, §5.2.3). Expect a reviewer to raise this. The answer is in their
+  own text: they attribute it to their architecture ("failed to condition the correction on
+  recent observations"), and their setting already contains the numerical forecast. Do not
+  present their result as showing that buoy history carries no skill, nor dismiss it.
 
 Still clean, uncontested gaps: (1) Wasserstein/optimal-transport distance as a **training-loss**
 term for spectral-density prediction, and (2) DMD as an **auxiliary input feature** rather than as
