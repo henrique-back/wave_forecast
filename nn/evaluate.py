@@ -331,7 +331,8 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                its trough-to-trough window) is classified
                                'wind_sea' vs 'swell' via
                                utils.spectral_partitioning.classify_partition
-                               (Violante-Carvalho γ* = S_obs(fp)/S_PM(fp)
+                               (Portilla et al. 2009 / Violante-Carvalho
+                               et al. 2002 γ* = S_obs(fp)/S_PM(fp)
                                threshold). Wind-sea partitions are broad,
                                energetic, fast-evolving (a magnitude/energy-
                                tracking problem); swell partitions are

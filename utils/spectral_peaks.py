@@ -66,8 +66,9 @@ def peak_modality_metrics(freqs, pred_final, true_final, f_max=0.4, energy_frac=
 
     Every true partition (a Portilla-significant peak plus its
     trough-to-trough window, from find_peak_windows) is also classified
-    'wind_sea' vs 'swell' via classify_partition (Violante-Carvalho
-    gamma* = S_obs(fp)/S_PM(fp) threshold), and three per-partition
+    'wind_sea' vs 'swell' via classify_partition (Portilla et al. 2009 /
+    Violante-Carvalho et al. 2002 gamma* = S_obs(fp)/S_PM(fp) threshold),
+    and three per-partition
     quantities — peak height relative error, separation recall, and
     Tm02 = sqrt(m0/m2) period error, all computed WITHIN that partition's
     own window — are pooled both overall (unsuffixed keys, backward

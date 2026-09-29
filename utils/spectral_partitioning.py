@@ -83,7 +83,8 @@ def classify_partition(
     ----------
     fp           : peak frequency of the partition [Hz]
     S_obs_at_fp  : spectral energy density at fp [m² Hz⁻¹]
-    threshold    : γ* threshold (default 1.0 per Violante-Carvalho 2009)
+    threshold    : γ* threshold (default 1.0 per Portilla et al. 2009, section 3b,
+                   building on Violante-Carvalho et al. 2002)
 
     Returns
     -------
