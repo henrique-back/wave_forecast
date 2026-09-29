@@ -1,0 +1,15 @@
+Checkpoint: results/shape_v13/shape/lead_12h/best_model.pt (trial 119, smoothed val score 0.5686)
+Split: val, lead 12 h, seq_len 12, first 4 windows per spectrum
+Mean significant peaks per spectrum (final step): true 3.69, predicted 7.88
+
+=== final step: 8811 true partitions ===
+nearest predicted peak inside true window: all=94.8% (n=8811)  wind_sea=92.5% (n=3491)  swell=96.2% (n=5320)  width<=5 bins=92.6% (n=3547)
+distance true peak -> nearest predicted peak (bins): 0: 34.9%  1: 55.1%  2: 7.4%  3-5: 2.1%  >5: 0.5%  (no predicted peak: 0.0%)
+median relative height error, displaced (n=462): peak term 0.236 vs nearest predicted peak 0.422
+median relative height error, in window (n=8349): peak term 0.235
+
+=== all steps (what the loss sees): 105721 true partitions ===
+nearest predicted peak inside true window: all=94.9% (n=105721)  wind_sea=92.8% (n=41760)  swell=96.3% (n=63961)  width<=5 bins=92.6% (n=42552)
+distance true peak -> nearest predicted peak (bins): 0: 34.9%  1: 55.3%  2: 7.2%  3-5: 2.2%  >5: 0.5%  (no predicted peak: 0.0%)
+median relative height error, displaced (n=5415): peak term 0.211 vs nearest predicted peak 0.418
+median relative height error, in window (n=100306): peak term 0.213
