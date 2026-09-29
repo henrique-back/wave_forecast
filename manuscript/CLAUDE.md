@@ -2,6 +2,211 @@
 
 Instructions for working in this folder. Read this before touching any `.tex` file here.
 
+## 0. Manuscript narrative spine (main idea, gap, contributions)
+
+Settled 2026-09-23, synthesized from `literature/personal_notes.md` and the "gap this corpus
+does not fill" section of `literature/notes.md` — read this before drafting or revising
+`sections/01_introduction.tex` (and before any Discussion framing that restates the paper's
+contribution). Treat this as the agreed story to write *to*, not a first draft to reconstruct
+each time; revise it here if the story changes rather than silently drafting a different one
+in `01_introduction.tex`.
+
+### 0.1 The headline — which story this paper tells
+
+**Settled: the paper leads with the measurement/objective argument, not with the model.**
+
+The headline is *"the way spectral wave forecasts are trained and evaluated systematically
+rewards over-smoothing, and here is a loss and an evaluation panel that do not"*. The transformer
+is the vehicle that demonstrates it, not the claim itself.
+
+This choice is deliberate and should not be quietly reversed while drafting. Framing the paper as
+"a transformer that forecasts wave spectra" invites exactly the critique in `jiang2024comment`
+(complex models do not outperform auto-regression for Hs time series) and positions the work as
+one more deep-learning application. The measurement argument is the more transferable and the
+more defensible contribution, and it is what the loss ablation actually demonstrates.
+
+### 0.2 Main idea
+
+A transformer forecasts the 1D wave spectrum from a single buoy's own recent history (5
+channels), rather than only a scalar bulk parameter (Hs or Tp) — either directly (`density`
+target) or via a shape/magnitude decomposition (separate `hs` and `shape` models recombined at
+inference; see parent `../CLAUDE.md`, "Shape/magnitude model split") that decouples the easier
+magnitude-forecasting problem from the harder shape-forecasting one. Both spectral targets are
+predicted in **log space**, so non-negativity of the recovered physical spectrum follows by
+construction (exponentiation at the point of use) rather than from a saturating output activation
+or clipping — a small but real modelling choice, already written up in `02_methods.tex`
+§Problem formulation, and worth one clause in the contributions list.
+
+### 0.3 The gap, four layers deep (each sits inside the one before it)
+
+1. *AI/DL vs numerical models, generally.* Data-driven models — transformers especially — now
+   **match or approach** operational numerical weather prediction skill for meteorological
+   forecasting; the analogous gains have been slower to materialise for ocean forecasting.
+   Cite `rasp2024weatherbench2` (WeatherBench 2) and `benbouallegue2024rise` (ECMWF's
+   operational-like assessment).
+   **WORDING CONSTRAINT — do not write "consistently outperform".** Neither source supports it;
+   `benbouallegue2024rise` reports "comparable accuracy" and names drawbacks explicitly. Both are
+   also **atmosphere-only**, so the "slower for ocean forecasting" half is still uncited — hedge
+   it as the authors' own observation. See `personal_notes.md`, "weather - numerical vs AI
+   models", for the full correction and the GraphCast alternative if a stronger verb is ever
+   wanted.
+2. *Within ocean forecasting, AI/ML work has stopped at scalar bulk parameters.* The lineage
+   holds from 2004 to 2026 — early ANN forecast correction (`makarynskyy2004`, Hs/Tz at 1-24h)
+   through EMD-LSTM (`zhou2021emdlstm`, Hs at 3-72h) to the most recent transformer work
+   (`kim2026metoformer`, joint scalar metocean variables) — none forecast the full spectrum. The
+   consistency of the pattern across 22 years is what makes it a real, persistent gap rather than
+   an artifact of older literature.
+3. *Bulk parameters are not a sufficient statistic for what the forecast is used for.* This is the
+   **consequence** argument, and it must sit alongside the information argument (the spectrum is
+   richer; bulk parameters are derivable from it but not the reverse) — on its own the information
+   argument invites "richer for what?". Structural and vessel response is frequency-dependent, so
+   two sea states carrying identical total energy — identical Hs — produce materially different
+   motions, loads and fatigue when that energy is distributed differently across frequency.
+   Cite `orimoloye2019bimodal`, which constructs **energy-conserved** bimodal sea states (total
+   energy fixed, swell fraction and swell peak period varied) and finds the wave-height
+   distribution changing with them.
+   **Careful with direction:** that paper reports *greater* non-linearity in unimodal seas at
+   matched energy. The citable claim is "spectral composition changes behaviour at fixed Hs", NOT
+   "bimodal seas are more severe". `simao2025bimodal` would carry this through to moored-structure
+   extreme response, which is the step we actually want — but **it is unread** (ASME paywall), so
+   attribute nothing to it until someone reads it.
+   This layer is also the motivation for the multimodal/partition-conditioned evaluation panel:
+   bimodality is not a completeness exercise, it is precisely the regime where bulk parameters are
+   least informative, and therefore where whole-spectrum aggregate scoring is most misleading.
+4. *Forecasting the spectrum breaks the metrics used for the scalar problem — the headline layer.*
+   A frequency-weighted aggregate error over the whole spectrum dilutes an error confined to a
+   narrow peak (1-2 of 47 bins) almost to invisibility, so a forecast that merges a distinct swell
+   and wind-sea pair into one smoothed hump can score as well as a faithful one. Compounding this,
+   models trained under different loss terms cannot be compared on either one's own objective — a
+   model optimised for RMSE will naturally score better on RMSE than one optimised for Wasserstein,
+   and neither comparison establishes which generalises better across the whole spectrum. Hence
+   both a peak-resolved, partition-conditioned evaluation panel and a loss-agnostic selection
+   criterion.
+   Sourcing for this layer: `hernandez2025intercomparison` for the present-day scale of operational
+   wave verification (WMO Lead Centre, 18 systems), `ecmwf2026lcwfvproject` for its verification
+   against buoy data, and `ecmwf2019lcwfvparameters` for what it verifies (six integrated
+   parameters derived from the 2-D spectrum; the spectrum itself is not exchanged). Hernandez does
+   not name the variables, so the Parameters page carries that claim. `bidlot2002intercomparison`
+   is no longer cited here. Then `hanson2009pacific` for the
+   wave-modelling community's own published critique of it — "one must look into the spectral
+   details to identify sources of model deficiencies", bulk parameters "can mask higher-order
+   deficiencies". `benbouallegue2024rise` supplies independent cross-domain evidence that
+   **over-smoothing is a characteristic failure mode of data-driven forecasters**, which reframes
+   this from a wave-specific quirk into an instance of a documented pathology.
+
+### 0.4 Answering `jiang2024comment` head-on
+
+`jiang2024comment` ("Complex models do not outperform auto-regression" for Hs time-series
+prediction) is a live critique of exactly this paper's genre, and it is already in the corpus.
+**Engage it explicitly in the Introduction rather than ignoring it.** The response is already
+built into the design: a per-frequency-bin ridge autoregressive baseline, rolled out recursively
+for the same horizon (`02_methods.tex` §Baselines), included precisely because that critique is
+fair for the scalar problem. Because it has no cross-frequency coupling and no non-linearity, it
+isolates how much skill comes from genuinely non-linear, cross-bin structure rather than per-bin
+temporal extrapolation.
+
+Frame it as: the critique is well-taken for scalar Hs forecasting; the question this paper asks is
+whether it still holds when the target is the spectrum, and it is tested rather than assumed.
+
+### 0.5 What is and is not novel — honest boundaries
+
+The overall combination remains unmatched (see `literature/notes.md`, "The gap this corpus does
+not fill"), but **two components have precedent that a 2026-09-23 search turned up, and the
+manuscript must not overclaim them**:
+
+- **Partition-conditioned evaluation is not new.** `hanson2009pacific` verified numerical wave
+  models per wind-sea/swell partition in 2009. The defensible contribution is narrower: carrying
+  an established *numerical-model verification* practice into both the evaluation and the
+  **training objective** of a learned forecast, where a single aggregate score remains the norm.
+- **The shape/magnitude factorisation is not new in forecasting generally.** `sevlian2018scaling`
+  uses "scalar total × normalised shape, multiplied at inference" for electricity load;
+  `guo2026loadshape` argues the same divide-and-conquer rationale. No ocean-domain precedent was
+  found, so claim the *application* — unit-area spectrum as a decoupled forecast target with the
+  physical m₀ = (Hs/4)² relation supplying magnitude — not the factorisation. Note too that
+  non-dimensionalising spectra by Hs is routine in wave *characterisation* (JONSWAP-family
+  parameterisations), so the normalisation itself is not novel either.
+
+Still clean, uncontested gaps: (1) Wasserstein/optimal-transport distance as a **training-loss**
+term for spectral-density prediction, and (2) DMD as an **auxiliary input feature** rather than as
+the forecasting method itself.
+
+### 0.6 Why AI/DL at all, rather than only numerical models
+
+Per `personal_notes.md`'s "usefulness of AI/DL models" entry — cite `james2018wave`,
+`minuzzi2023lstm`. Numerical spectral wave models (WAVEWATCH III, SWAN) solve the energy balance
+equation explicitly, requiring a full forcing chain (atmospheric model output, boundary
+conditions, bathymetry) and heavy compute; a trained model instead maps recently observed buoy
+spectra directly to a forecast at a fraction of the inference cost, without a coupled
+ocean-atmosphere modelling chain. State this as a genuine trade-off, not a one-sided pitch (§5's
+"old-vs-new contrast" rule already requires this): the data-driven approach gains speed and can
+implicitly learn spectral evolution patterns (swell dispersion, wind-sea growth/decay) without an
+explicit physical parameterisation, at the cost of interpretability and the physical guarantees a
+numerical model provides by construction. Do **not** lean on an "unavailable at remote/local
+sites" framing — neither cited source states that claim; both argue the computational-cost/
+surrogate version only.
+
+### 0.7 Scope — state it plainly, it is a design choice not a weakness
+
+- **Per-site models, by design.** The model is trained for a specific location, so no spatial
+  (unseen-buoy) generalisation is claimed or required — training per site *is* the approach, not a
+  shortfall in it. The temporal hold-out is therefore the right evaluation and should be presented
+  without apology. Do not write this up as a limitation.
+- **Three buoys with differing climatology — PLANNED, NOT YET DONE.** The study is being extended
+  from the single site to three sites chosen for contrasting wave climates. Until those runs
+  exist, do not write the Introduction as though multi-site results are in hand; equally, do not
+  frame single-site as the paper's final scope. **Flag this to the author whenever drafting text
+  whose wording depends on it.**
+- **Reported statistics come from seed repetition.** Final results are produced by retraining the
+  selected configuration with identical hyperparameters across multiple random seeds, and reported
+  as mean ± spread, so the quoted variability reflects training noise rather than tuning quality
+  (`02_methods.tex` §Final model).
+- **The wind auxiliary channel could not be assessed at the site reported here** (every wind entry
+  in its standard meteorological record is a missing-value sentinel); the DMD growth/decay
+  features, derived from the spectra themselves, are used instead.
+
+### 0.8 Draft contributions
+
+Tentative, in the author's usual "(i)...; (ii)..." Introduction convention. Refine once Results
+exists — **do not present these as final, and do not attach numbers to them yet** (see §0.9):
+
+(i) a transformer with a frequency-structured spectral embedding that forecasts the 1D wave
+spectrum autoregressively from a single buoy's own history, predicted in log space so
+non-negativity holds by construction; (ii) a shape/magnitude decomposition that separates the
+(easier) magnitude problem from the (harder) shape problem, recombined at inference — applying to
+wave spectra a factorisation established in other forecasting domains; (iii) a composite spectral
+loss (KL-divergence + Wasserstein + soft-max peak height) motivated by per-bin error's inadequacy
+for spectral comparison (full justification in `decisions/wasserstein_kl_justification.tex`),
+together with a loss-agnostic selection criterion that makes differently-optimised models
+comparable; (iv) a peak-resolved, partition-conditioned (wind-sea/swell) evaluation panel that
+surfaces multimodal failure behaviour a whole-spectrum metric dilutes away.
+
+**The ablation protocol is methodological, not motivational.** `02_methods.tex` §Incremental
+ablation strategy (one change per iteration, matched re-search, seed-spread as the acceptance
+threshold, measured cost accounting, and an explicit "candidates tested and not retained" list) is
+unusually rigorous and belongs in the paper — but it is *how the work was done*, not *why the work
+matters*. Keep it in Methods where it already lives; do not promote it into the Introduction's
+motivation or gap statement. At most it earns a sentence in the contributions list or the roadmap
+paragraph.
+
+### 0.9 Results are not final — do not quote numbers yet
+
+The analysis is **still in progress**; current results in `results/` are not the final ones. Do not
+carry any specific metric value from them into `.tex` prose, into the contributions list, or into
+the abstract yet — including the loss-ablation figures already written into `02_methods.tex`
+§Incremental ablation strategy, which should be re-checked against the final runs before
+submission. Ask the author before quoting any number.
+
+**Planned and flagged for later: a climatological analysis of the three sites.** When it exists it
+belongs in the Methods dataset subsection, together with the site characterisation (station
+identity, location, wave climate, why these three contrast usefully) — not in the Introduction.
+
+### 0.10 Status of this section
+
+A synthesis, not new source material — every factual claim still needs its own citation check
+against `refs.bib` (§3) and its own numeric backing against `results/` (§2) before it lands in
+`.tex` prose. Update this section directly if the story changes, rather than letting
+`01_introduction.tex` drift away from it.
+
 ## 1. Project context
 
 This is a manuscript reporting the transformer-based wave-spectra forecasting work in the
@@ -54,8 +259,16 @@ don't add entries there. Both files were empty at the time of writing; `literatu
 is where all real entries go from here on.
 
 Rules:
-- Only cite works that exist as entries in `literature/refs.bib` (or are documented in
-  `literature/notes.md`, if/when that file exists — it doesn't yet).
+- Only cite works that exist as entries in `literature/refs.bib`, or are documented in
+  `literature/notes.md`/`literature/notes/*.md` (Claude-generated per-paper triage records)
+  or `literature/personal_notes.md` (the author's own free-form reading notes and ideas —
+  read this too before drafting; check it for arguments/framings the author already wants
+  used, not just for citations).
+- `literature/personal_notes.md` entries are tagged `Reference: <bibkey>`,
+  `Reference: <freeform citation, not yet in refs.bib>`, or `Reference: none yet` — see that
+  file's own header for how to treat each. A `none yet`/freeform entry backing a claim that
+  needs a citation is **not** a substitute for a real `refs.bib` entry — flag it rather than
+  citing it directly or inventing BibTeX from the freeform text.
 - **Never cite from training-data recall.** If a claim needs a citation not present in
   `literature/`, say so explicitly (e.g. "this claim needs a citation for X — none found in
   literature/, please add one or confirm the source") rather than inventing a plausible

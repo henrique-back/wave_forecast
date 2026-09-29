@@ -1,0 +1,643 @@
+%% manuscript/literature/refs.bib — canonical bibliography (see manuscript/CLAUDE.md §3).
+%% Every entry below was verified against a live source (the paper's own title page/DOI, a
+%% Crossref/DOI lookup, or a publisher listing) during the 2026-09-18 literature pass — none
+%% are reconstructed from memory. See manuscript/literature/notes.md for the full triage record
+%% (relevance tier + suggested manuscript use) behind each key.
+%%
+%% NOT included here: `violantecarvalho2009`. No such paper exists in the corpus. The PDF
+%% supplied on 2026-09-29 under that name is the 2002 JOMAE paper (filed below as
+%% `violantecarvalho2002`), and it does not state gamma*. The gamma* > 1 test is portilla2009's
+%% own (their section 3b). On 2026-09-29 sections/02_methods.tex was re-pointed to cite both
+%% portilla2009 (source of gamma*) and violantecarvalho2002 (its precursor). Do not re-add the
+%% 2009 key.
+
+%% ===================== Standard method / tooling citations =====================
+
+@inproceedings{vaswani2017attention,
+  author    = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N. and Kaiser, Lukasz and Polosukhin, Illia},
+  title     = {Attention Is All You Need},
+  booktitle = {Advances in Neural Information Processing Systems 30 (NeurIPS 2017)},
+  year      = {2017},
+  pages     = {5998--6008}
+}
+
+%% xiong2020prenorm: added 2026-09-29, metadata confirmed against the PMLR landing page
+%% (proceedings.mlr.press/v119/xiong20b.html) and the arXiv API record for 2002.04745. PMLR
+%% issues no DOI. Local PDF is the published PMLR version. Supports the pre-norm arrangement
+%% (gradients at initialisation, warm-up sensitivity), not a depth-stability claim; see its note.
+@inproceedings{xiong2020prenorm,
+  author    = {Xiong, Ruibin and Yang, Yunchang and He, Di and Zheng, Kai and Zheng, Shuxin and Xing, Chen and Zhang, Huishuai and Lan, Yanyan and Wang, Liwei and Liu, Tie-Yan},
+  title     = {On Layer Normalization in the Transformer Architecture},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning (ICML 2020)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {119},
+  year      = {2020},
+  pages     = {10524--10533}
+}
+
+@inproceedings{loshchilov2019adamw,
+  author    = {Loshchilov, Ilya and Hutter, Frank},
+  title     = {Decoupled Weight Decay Regularization},
+  booktitle = {7th International Conference on Learning Representations (ICLR 2019)},
+  year      = {2019}
+}
+
+@inproceedings{bengio2015scheduledsampling,
+  author    = {Bengio, Samy and Vinyals, Oriol and Jaitly, Navdeep and Shazeer, Noam},
+  title     = {Scheduled Sampling for Sequence Prediction with Recurrent Neural Networks},
+  booktitle = {Advances in Neural Information Processing Systems 28 (NeurIPS 2015)},
+  year      = {2015},
+  pages     = {1171--1179}
+}
+
+@inproceedings{akiba2019optuna,
+  author    = {Akiba, Takuya and Sano, Shotaro and Yanase, Toshihiko and Ohta, Takeru and Koyama, Masanori},
+  title     = {Optuna: A Next-generation Hyperparameter Optimization Framework},
+  booktitle = {Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining (KDD '19)},
+  year      = {2019},
+  pages     = {2623--2631},
+  doi       = {10.1145/3292500.3330701}
+}
+
+@inproceedings{bergstra2011tpe,
+  author    = {Bergstra, James and Bardenet, R{\'e}mi and Bengio, Yoshua and K{\'e}gl, Bal{\'a}zs},
+  title     = {Algorithms for Hyper-Parameter Optimization},
+  booktitle = {Advances in Neural Information Processing Systems 24 (NeurIPS 2011)},
+  year      = {2011},
+  pages     = {2546--2554}
+}
+
+@article{kullback1951,
+  author  = {Kullback, S. and Leibler, R. A.},
+  title   = {On Information and Sufficiency},
+  journal = {Annals of Mathematical Statistics},
+  volume  = {22},
+  number  = {1},
+  pages   = {79--86},
+  year    = {1951},
+  doi     = {10.1214/aoms/1177729694}
+}
+
+@article{schmid2010dmd,
+  author  = {Schmid, Peter J.},
+  title   = {Dynamic Mode Decomposition of Numerical and Experimental Data},
+  journal = {Journal of Fluid Mechanics},
+  volume  = {656},
+  pages   = {5--28},
+  year    = {2010},
+  doi     = {10.1017/S0022112010001217}
+}
+
+@article{peyre2019,
+  author  = {Peyr{\'e}, Gabriel and Cuturi, Marco},
+  title   = {Computational Optimal Transport},
+  journal = {Foundations and Trends in Machine Learning},
+  volume  = {11},
+  number  = {5-6},
+  pages   = {355--607},
+  year    = {2019},
+  doi     = {10.1561/2200000073}
+}
+
+@inproceedings{cuturi2013sinkhorn,
+  author    = {Cuturi, Marco},
+  title     = {Sinkhorn Distances: Lightspeed Computation of Optimal Transport},
+  booktitle = {Advances in Neural Information Processing Systems 26 (NeurIPS 2013)},
+  year      = {2013},
+  pages     = {2292--2300}
+}
+
+@article{portilla2009,
+  author  = {Portilla, Jesus and Ocampo-Torres, Francisco J. and Monbaliu, Jaak},
+  title   = {Spectral Partitioning and Identification of Wind Sea and Swell},
+  journal = {Journal of Atmospheric and Oceanic Technology},
+  volume  = {26},
+  number  = {1},
+  pages   = {107--122},
+  year    = {2009},
+  doi     = {10.1175/2008JTECHO609.1}
+}
+
+%% violantecarvalho2002: added 2026-09-29, metadata confirmed against Crossref and the local PDF
+%% (published ASME version). Crossref `issued` is 2001-08-04 (revised-manuscript date); the print
+%% issue is February 2002, which is also how portilla2009 cites it. It is the precursor JONSWAP-fit
+%% wind-sea identification that portilla2009 builds on, NOT the source of the gamma* threshold.
+@article{violantecarvalho2002,
+  author  = {Violante-Carvalho, Nelson and Parente, Carlos Eduardo and Robinson, Ian S. and Nunes, Luis Manoel P.},
+  title   = {On the Growth of Wind-Generated Waves in a Swell-Dominated Region in the South Atlantic},
+  journal = {Journal of Offshore Mechanics and Arctic Engineering},
+  volume  = {124},
+  number  = {1},
+  pages   = {14--21},
+  year    = {2002},
+  doi     = {10.1115/1.1423636}
+}
+
+%% ===================== Wave-physics / buoy-processing background =====================
+
+@incollection{longuethiggins1963,
+  author    = {Longuet-Higgins, M. S. and Cartwright, D. E. and Smith, N. D.},
+  title     = {Observations of the Directional Spectrum of Sea Waves Using the Motions of a Floating Buoy},
+  booktitle = {Ocean Wave Spectra},
+  publisher = {Prentice-Hall},
+  address   = {Englewood Cliffs, NJ},
+  pages     = {111--131},
+  year      = {1963}
+}
+
+@article{kuik1988,
+  author  = {Kuik, A. J. and van Vledder, G. Ph. and Holthuijsen, L. H.},
+  title   = {A Method for the Routine Analysis of Pitch-and-Roll Buoy Wave Data},
+  journal = {Journal of Physical Oceanography},
+  volume  = {18},
+  number  = {7},
+  pages   = {1020--1034},
+  year    = {1988},
+  doi     = {10.1175/1520-0485(1988)018<1020:AMFTRA>2.0.CO;2}
+}
+
+%% gorman2018: added 2026-09-29. `\citep{gorman2018}` was already in 01_introduction.tex with
+%% no entry and no corpus record behind it. Metadata confirmed via Crossref (journal-article)
+%% and OpenAlex/Semantic Scholar. It is open access (CC BY-NC-ND), but ScienceDirect blocks
+%% automated download, so it is verified at ABSTRACT level only. See notes/gorman2018.md before
+%% widening its use.
+@article{gorman2018,
+  author  = {Gorman, Richard M.},
+  title   = {Estimation of Directional Spectra from Wave Buoys for Model Validation},
+  journal = {Procedia IUTAM},
+  volume  = {26},
+  pages   = {81--91},
+  year    = {2018},
+  doi     = {10.1016/j.piutam.2018.03.008}
+}
+
+@techreport{ndbc2003techdoc,
+  author      = {Earle, Marshall D.},
+  title       = {Nondirectional and Directional Wave Data Analysis Procedures},
+  institution = {NOAA National Data Buoy Center},
+  number      = {NDBC Technical Document 03-01},
+  address     = {Silver Spring, MD},
+  year        = {2003},
+  url         = {https://www.ndbc.noaa.gov/wavemeas.pdf}
+}
+
+@book{holthuijsen2007,
+  author    = {Holthuijsen, Leo H.},
+  title     = {Waves in Oceanic and Coastal Waters},
+  publisher = {Cambridge University Press},
+  year      = {2007}
+}
+
+%% ===================== Local corpus: buoy/spectral wave forecasting & ML literature =====================
+
+@article{makarynskyy2004,
+  author  = {Makarynskyy, Oleg},
+  title   = {Improving Wave Predictions with Artificial Neural Networks},
+  journal = {Ocean Engineering},
+  volume  = {31},
+  number  = {5-6},
+  pages   = {709--724},
+  year    = {2004},
+  doi     = {10.1016/j.oceaneng.2003.05.003}
+}
+
+@article{fisher2021sparse,
+  author  = {Fisher, A. and Thomson, J. and Schwendeman, M.},
+  title   = {Rapid Deterministic Wave Prediction Using a Sparse Array of Buoys},
+  journal = {Ocean Engineering},
+  volume  = {228},
+  pages   = {108871},
+  year    = {2021},
+  doi     = {10.1016/j.oceaneng.2021.108871}
+}
+
+@article{hwang2024decnn,
+  author  = {Hwang, Sunghyun and Lee, Jung Lyul and Chun, Hyunjoo},
+  title   = {Applying Artificial Neural Network to Zero-Crossing Wave Parameters for the Wave Spectrum},
+  journal = {Ocean Engineering},
+  volume  = {309},
+  pages   = {118331},
+  year    = {2024},
+  doi     = {10.1016/j.oceaneng.2024.118331}
+}
+
+@article{sun2025gpgnn,
+  author  = {Sun, Lei and Wang, Jian and Li, Zhen and Jiao, Zhipeng and Ma, Yang},
+  title   = {G-PGNN: A Physics-Guided Generative Neural Network Model for Discrete Spectrum Prediction},
+  journal = {Ocean Engineering},
+  volume  = {340},
+  pages   = {122411},
+  year    = {2025},
+  doi     = {10.1016/j.oceaneng.2025.122411}
+}
+
+@article{kim2026metoformer,
+  author  = {Kim, Yerin and Kwon, Chanhui and Lee, Hyeon and Seok, Jongwoo},
+  title   = {A Multi-Scale and Horizon-Adaptive Transformer for Operational Metocean Forecasting in Korean Coastal Buoy Networks},
+  journal = {Ocean Engineering},
+  volume  = {362},
+  pages   = {126344},
+  year    = {2026},
+  doi     = {10.1016/j.oceaneng.2026.126344}
+}
+
+@article{gao2025jgr,
+  author  = {Gao, Tao and Jiang, Haoyu},
+  title   = {Physics-Guided Deep Learning for Modeling Single-Point Wave Spectra Using Wind Inputs of Two Resolutions},
+  journal = {JGR Machine Learning and Computation},
+  volume  = {2},
+  pages   = {e2024JH000492},
+  year    = {2025},
+  doi     = {10.1029/2024JH000492}
+}
+
+@article{filoche2026postprocessing,
+  author  = {Filoche, Arthur and Hansen, Jeff and Vinsen, Kevin and Dawson, Travis},
+  title   = {Site-Specific Post-Processing of Spectral Wave Forecast by Learning From Buoy Measurements},
+  journal = {JGR Machine Learning and Computation},
+  volume  = {3},
+  pages   = {e2026JH001454},
+  year    = {2026},
+  doi     = {10.1029/2026JH001454}
+}
+
+@article{zhou2021emdlstm,
+  author  = {Zhou, Shuyi and Bethel, Brandon J. and Sun, Wenjin and Zhao, Yuanhang and Xie, Weiping and Dong, Changming},
+  title   = {Improving Significant Wave Height Forecasts Using a Joint Empirical Mode Decomposition--Long Short-Term Memory Network},
+  journal = {Journal of Marine Science and Engineering},
+  volume  = {9},
+  number  = {7},
+  pages   = {744},
+  year    = {2021},
+  doi     = {10.3390/jmse9070744}
+}
+
+@article{kwon2025jmse,
+  author  = {Kwon, Dong-Su and Kim, Sung-Jae and Jin, Chungkuk and Kim, Moohyun},
+  title   = {Parametric Estimation of Directional Wave Spectra from Moored FPSO Motion Data Using Optimized Artificial Neural Networks},
+  journal = {Journal of Marine Science and Engineering},
+  volume  = {13},
+  number  = {1},
+  pages   = {69},
+  year    = {2025},
+  doi     = {10.3390/jmse13010069}
+}
+
+@article{liu2025cnnxlstm,
+  author  = {Liu, Yao and Li, Rui and Hu, Wei and Ren, Peng and Xu, Chao},
+  title   = {Regional Wave Spectra Prediction Method Based on Deep Learning},
+  journal = {Journal of Marine Science and Engineering},
+  volume  = {13},
+  number  = {8},
+  pages   = {1461},
+  year    = {2025},
+  doi     = {10.3390/jmse13081461}
+}
+
+@article{nielsen2023shipbuoy,
+  author  = {Nielsen, Ulrik D. and Mittendorf, Malte and Shao, Yanlin and Storhaug, Gaute},
+  title   = {Wave Spectrum Estimation Conditioned on Machine Learning-Based Output Using the Wave Buoy Analogy},
+  journal = {Marine Structures},
+  volume  = {91},
+  pages   = {103470},
+  year    = {2023},
+  doi     = {10.1016/j.marstruc.2023.103470}
+}
+
+@article{naithani2005ann,
+  author  = {Naithani, R. and Deo, M. C.},
+  title   = {Estimation of Wave Spectral Shapes Using ANN},
+  journal = {Advances in Engineering Software},
+  volume  = {36},
+  pages   = {750--756},
+  year    = {2005},
+  doi     = {10.1016/j.advengsoft.2005.03.021}
+}
+
+@article{jiang2024comment,
+  author  = {Jiang, Haoyu and Zhang, Yuan and Qian, Chengcheng and Wang, Xuan},
+  title   = {Comment on Papers Using Machine Learning for Significant Wave Height Time Series Prediction: Complex Models Do Not Outperform Auto-Regression},
+  journal = {Ocean Modelling},
+  volume  = {189},
+  pages   = {102364},
+  year    = {2024},
+  doi     = {10.1016/j.ocemod.2024.102364}
+}
+
+@inproceedings{liu2024markov,
+  author    = {Liu, Fang and Lai, Xuanzhi and Wen, Hao and Lu, Chunhui and Wang, Yuxuan and Cao, Wei and Wu, Meng},
+  title     = {A Markov Prediction Model for Sea-Level Fluctuations Based on Wave Spectrum},
+  booktitle = {Proceedings of the 43rd Chinese Control Conference (CCC 2024)},
+  address   = {Kunming, China},
+  pages     = {3547--3551},
+  year      = {2024}
+}
+
+@inproceedings{zeng2020seq2seq,
+  author    = {Zeng, Xiangyang and Qi, Lin and Yi, Ting and Liu, Tao},
+  title     = {A Sequence-to-Sequence Model Based on Attention Mechanism for Wave Spectrum Prediction},
+  booktitle = {2020 11th International Conference on Awareness Science and Technology (iCAST)},
+  address   = {Qingdao, China},
+  year      = {2020},
+  doi       = {10.1109/iCAST51195.2020.9319473}
+}
+
+@article{ding2023eofeemd,
+  author  = {Ding, Jia and Deng, Fei and Liu, Qing and Wang, Jian},
+  title   = {Regional Forecasting of Significant Wave Height and Mean Wave Period Using EOF-EEMD-SCINet Hybrid Model},
+  journal = {Applied Ocean Research},
+  volume  = {136},
+  pages   = {103582},
+  year    = {2023},
+  doi     = {10.1016/j.apor.2023.103582}
+}
+
+@article{kwon2026transformer,
+  author  = {Kwon, Dong-Su and Jin, Chungkuk and Kim, Moohyun and Kim, Sung-Jae},
+  title   = {Transformers and Neural Networks for Estimation of Parameters of Multi-Directional Waves from Rich Statistics of FPSO Motion Signals},
+  journal = {Applied Ocean Research},
+  volume  = {166},
+  pages   = {104927},
+  year    = {2026},
+  doi     = {10.1016/j.apor.2026.104927}
+}
+
+@article{cao2025bohai,
+  author  = {Cao, Xin and Zuo, Min and Wang, Xu and Wang, Zhen and Niu, Yifei and Wang, Peng and Lv, Yang},
+  title   = {The Method of Single Points Wave Spectrum Generation for Regional Sea Based on Multimodal Model in the Bohai Sea, China},
+  journal = {Dynamics of Atmospheres and Oceans},
+  volume  = {111},
+  pages   = {101586},
+  year    = {2025},
+  doi     = {10.1016/j.dynatmoce.2025.101586}
+}
+
+@article{mandal2005bpnn,
+  author  = {Mandal, S. and Rao, S. and Raju, D. Hanumantha},
+  title   = {Ocean Wave Parameters Estimation Using Backpropagation Neural Networks},
+  journal = {Marine Structures},
+  volume  = {18},
+  pages   = {301--318},
+  year    = {2005},
+  doi     = {10.1016/j.marstruc.2005.09.002}
+}
+
+@article{sakhare2009svr,
+  author  = {Sakhare, S. and Deo, M. C.},
+  title   = {Derivation of Wave Spectrum Using Data Driven Methods},
+  journal = {Marine Structures},
+  volume  = {22},
+  pages   = {594--609},
+  year    = {2009},
+  doi     = {10.1016/j.marstruc.2008.12.004}
+}
+
+@article{namekar2006ann,
+  author  = {Namekar, Sharad and Deo, M. C.},
+  title   = {Application of Artificial Neural Network Model in Estimation of Wave Spectra},
+  journal = {Journal of Waterway, Port, Coastal, and Ocean Engineering},
+  volume  = {132},
+  number  = {5},
+  pages   = {415--418},
+  year    = {2006},
+  doi     = {10.1061/(ASCE)0733-950X(2006)132:5(415)}
+}
+
+@inproceedings{kambekar2009asce,
+  author    = {Kambekar, A. R. and Deo, M. C. and Daga, Mansi and Sakhare, Suhasini},
+  title     = {Data Driven Methods to Analyze Wave Buoy Observations},
+  booktitle = {Computing in Civil Engineering (2009)},
+  address   = {Austin, TX},
+  pages     = {398--409},
+  year      = {2009},
+  doi       = {10.1061/41052(346)40}
+}
+
+@article{song2023jpo,
+  author  = {Song, Yiran and Jiang, Haoyu},
+  title   = {A Deep Learning-Based Approach for Empirical Modeling of Single-Point Wave Spectra in Open Oceans},
+  journal = {Journal of Physical Oceanography},
+  volume  = {53},
+  number  = {9},
+  year    = {2023},
+  doi     = {10.1175/JPO-D-22-0198.1}
+}
+
+@phdthesis{cooper2023thesis,
+  author = {Cooper, Davis},
+  title  = {Applications of the Bures-Wasserstein Distance in Linear Metric Learning},
+  school = {Victoria University of Wellington},
+  year   = {2023}
+}
+
+@article{elkhrachy2023water,
+  author  = {Elkhrachy, Ismail and Alhamami, Ahmed and Alyami, Salem H. and Alviz-Meza, Alexis},
+  title   = {Novel Ocean Wave Height and Energy Spectrum Forecasting Approaches: An Application of Semi-Analytical and Machine Learning Models},
+  journal = {Water},
+  volume  = {15},
+  number  = {18},
+  pages   = {3254},
+  year    = {2023},
+  doi     = {10.3390/w15183254}
+}
+
+@misc{ardhuin2025waves,
+  author = {Ardhuin, Fabrice},
+  title  = {Ocean Waves in Geosciences, Parts 1 and 2: General Wave Topics from Deep to Shallow Water},
+  howpublished = {Laboratoire d'Oc{\'e}anographie Physique et Spatiale, Brest},
+  year   = {2025},
+  month  = oct,
+  doi    = {10.13140/RG.2.2.16019.78888/12},
+  note   = {Course notes, not peer-reviewed; date and DOI confirmed directly from the document's own title page}
+}
+
+%% ===================== Gap-verification comparators (not locally held; found via websearch) =====================
+%% Full author/venue/volume confirmed; DOIs not located for the two Ocean Engineering entries
+%% below (article-number-only listings), so `doi` is omitted rather than guessed.
+
+@article{meng2023windswell,
+  author  = {Meng, Yao and Li, Xin and Wang, Zhen and Jiang, Haoyu},
+  title   = {Wind-Sea and Swell Separation of 1D Wave Spectrum by Deep Learning},
+  journal = {Ocean Engineering},
+  volume  = {270},
+  pages   = {113672},
+  year    = {2023}
+}
+
+@article{breunung2023dmd,
+  author  = {Breunung, Thomas and Balachandran, Balakumar},
+  title   = {Data-Driven, High Resolution Ocean Wave Forecasting and Extreme Wave Predictions},
+  journal = {Ocean Engineering},
+  volume  = {268},
+  pages   = {113271},
+  year    = {2023}
+}
+
+@techreport{rogers2025espc,
+  author      = {Rogers, W. Erick and Janiga, Matthew A.},
+  title       = {Skill of Long-Range Forecasts of Ocean Wave Spectra from the Navy ESPC Version 2 System},
+  institution = {Naval Research Laboratory},
+  year        = {2025},
+  note        = {NRL Memorandum Report; preprint at arXiv:2510.06484}
+}
+
+%% ===================== Found via find-reference, 2026-09-21 (AI/DL motivation claims) =====================
+%% Metadata confirmed via Crossref DOI lookup; content confirmed by reading each paper's own
+%% arXiv preprint (both papers' published versions match the preprint text checked).
+
+@article{james2018wave,
+  author  = {James, Scott C. and Zhang, Yushan and O'Donncha, Fearghal},
+  title   = {A Machine Learning Framework to Forecast Wave Conditions},
+  journal = {Coastal Engineering},
+  volume  = {137},
+  pages   = {1--10},
+  year    = {2018},
+  doi     = {10.1016/j.coastaleng.2018.03.004}
+}
+
+@article{minuzzi2023lstm,
+  author  = {Minuzzi, Felipe C. and Farina, Leandro},
+  title   = {A Deep Learning Approach to Predict Significant Wave Height Using Long Short-Term Memory},
+  journal = {Ocean Modelling},
+  volume  = {181},
+  pages   = {102151},
+  year    = {2023},
+  doi     = {10.1016/j.ocemod.2022.102151}
+}
+
+%% ===================== Found via find-reference, 2026-09-23 (spectrum-vs-Hs operational motivation) =====================
+%% Metadata confirmed via Crossref DOI lookup (api.crossref.org) on 2026-09-23. orimoloye2019bimodal
+%% is gold OA (CC-BY) but MDPI blocks automated download — no local PDF, fetch manually from the DOI.
+%% simao2025bimodal is an ASME OMAE conference paper, paywalled; abstract-level verification only,
+%% full text not read — do not quote specifics from it beyond what notes/simao2025bimodal.md records.
+
+@article{orimoloye2019bimodal,
+  author  = {Orimoloye, Stephen and Karunarathna, Harshinie and Reeve, Dominic E.},
+  title   = {Effects of Swell on Wave Height Distribution of Energy-Conserved Bimodal Seas},
+  journal = {Journal of Marine Science and Engineering},
+  volume  = {7},
+  number  = {3},
+  pages   = {79},
+  year    = {2019},
+  doi     = {10.3390/jmse7030079}
+}
+
+@inproceedings{simao2025bimodal,
+  author    = {Sim{\~a}o, Marina Leivas and Videiro, Paulo Maur{\'i}cio and Sudati Sagrilo, Luis Volnei and de Oliveira, Mauro Costa},
+  title     = {Investigation on the Effect of Bimodal Sea States on Mooring Systems' Extreme Response Offshore {B}razil},
+  booktitle = {Proceedings of the ASME 2025 44th International Conference on Ocean, Offshore and Arctic Engineering (OMAE2025), Volume 1: Offshore Technology; Structures, Safety and Reliability; Materials Technology},
+  address   = {Vancouver, British Columbia, Canada},
+  year      = {2025},
+  note      = {Paper No.\ V001T02A012},
+  doi       = {10.1115/OMAE2025-157052}
+}
+
+%% ===================== Found via find-reference, 2026-09-23 (Introduction framing) =====================
+%% Metadata confirmed via Crossref DOI lookup (api.crossref.org) on 2026-09-23.
+%% WORDING CONSTRAINT on rasp2024weatherbench2 / benbouallegue2024rise: neither supports
+%% "data-driven models consistently outperform NWP" — both support "comparable/competitive",
+%% and both are atmosphere-only (nothing about ocean/wave forecasting). See their notes.
+%% PDF VERSION MISMATCH: the local PDFs for rasp2024weatherbench2, benbouallegue2024rise and
+%% sevlian2018scaling are arXiv preprints, not the published versions cited here — verify any
+%% quoted wording against the published article before it goes into the manuscript.
+%% bidlot2002intercomparison's local PDF is a partial copy (pp. 287-296 of 287-310).
+
+@article{rasp2024weatherbench2,
+  author  = {Rasp, Stephan and Hoyer, Stephan and Merose, Alexander and Langmore, Ian and Battaglia, Peter and Russell, Tyler and Sanchez-Gonzalez, Alvaro and Yang, Vivian and Carver, Rob and Agrawal, Shreya and Chantry, Matthew and Ben Bouallegue, Zied and Dueben, Peter and Bromberg, Carla and Sisk, Jared and Barrington, Luke and Bell, Aaron and Sha, Fei},
+  title   = {{WeatherBench 2}: A Benchmark for the Next Generation of Data-Driven Global Weather Models},
+  journal = {Journal of Advances in Modeling Earth Systems},
+  volume  = {16},
+  number  = {6},
+  pages   = {e2023MS004019},
+  year    = {2024},
+  doi     = {10.1029/2023MS004019}
+}
+
+@article{benbouallegue2024rise,
+  author  = {Ben Bouall{\`e}gue, Zied and Clare, Mariana C. A. and Magnusson, Linus and Gasc{\'o}n, Estibaliz and Maier-Gerber, Michael and Janou{\v{s}}ek, Martin and Rodwell, Mark and Pinault, Florian and Dramsch, Jesper S. and Lang, Simon T. K. and Raoult, Baudouin and Rabier, Florence and Chevallier, Matthieu and Sandu, Irina and Dueben, Peter and Chantry, Matthew and Pappenberger, Florian},
+  title   = {The Rise of Data-Driven Weather Forecasting: A First Statistical Assessment of Machine Learning-Based Weather Forecasts in an Operational-Like Context},
+  journal = {Bulletin of the American Meteorological Society},
+  volume  = {105},
+  number  = {6},
+  pages   = {E864--E883},
+  year    = {2024},
+  doi     = {10.1175/BAMS-D-23-0162.1}
+}
+
+@article{hanson2009pacific,
+  author  = {Hanson, Jeffrey L. and Tracy, Barbara A. and Tolman, Hendrik L. and Scott, R. Douglas},
+  title   = {Pacific Hindcast Performance of Three Numerical Wave Models},
+  journal = {Journal of Atmospheric and Oceanic Technology},
+  volume  = {26},
+  number  = {8},
+  pages   = {1614--1633},
+  year    = {2009},
+  doi     = {10.1175/2009JTECHO650.1}
+}
+
+@article{bidlot2002intercomparison,
+  author  = {Bidlot, Jean-Raymond and Holmes, Damian J. and Wittmann, Paul A. and Lalbeharry, Roop and Chen, Hsuan S.},
+  title   = {Intercomparison of the Performance of Operational Ocean Wave Forecasting Systems with Buoy Data},
+  journal = {Weather and Forecasting},
+  volume  = {17},
+  number  = {2},
+  pages   = {287--310},
+  year    = {2002},
+  doi     = {10.1175/1520-0434(2002)017<0287:IOTPOO>2.0.CO;2}
+}
+
+%% hernandez2025intercomparison: added 2026-09-24 (author-supplied PDF, full published version),
+%% metadata confirmed via Crossref DOI lookup the same day. Copernicus article-number convention:
+%% volume 5-opsr, article 17. Supports the current scale of operational wave verification only;
+%% it does not state which variables are verified — see its note before widening its use.
+@article{hernandez2025intercomparison,
+  author  = {Hernandez, Fabrice and Sotillo, Marcos Garcia and Melet, Ang{\'e}lique},
+  title   = {A Description of Model Intercomparison Processes and Techniques for Ocean Forecasting},
+  journal = {State of the Planet},
+  volume  = {5-opsr},
+  pages   = {17},
+  year    = {2025},
+  doi     = {10.5194/sp-5-opsr-17-2025}
+}
+
+%% WMO Lead Centre for Wave Forecast Verification (LC-WFV) pages, ECMWF Confluence: author-supplied
+%% link 2026-09-24 (the Project page, cited in hernandez2025intercomparison). Content read directly
+%% from the live pages (Confluence REST API) that day; year = each page's own "last updated" date.
+%% The Project page does NOT list the verified parameters, so cite the Parameters page for those.
+@misc{ecmwf2026lcwfvproject,
+  author       = {{ECMWF}},
+  title        = {Project -- {WMO Lead Centre for Wave Forecast Verification (LC-WFV)}},
+  howpublished = {European Centre for Medium-Range Weather Forecasts, Confluence documentation},
+  year         = {2026},
+  url          = {https://confluence.ecmwf.int/spaces/WLW/pages/104238338/Project},
+  note         = {{Page} last updated 22 April 2026; accessed 24 September 2026}
+}
+
+@misc{ecmwf2019lcwfvparameters,
+  author       = {{ECMWF}},
+  title        = {Parameters -- {WMO Lead Centre for Wave Forecast Verification (LC-WFV)}},
+  howpublished = {European Centre for Medium-Range Weather Forecasts, Confluence documentation},
+  year         = {2019},
+  url          = {https://confluence.ecmwf.int/spaces/WLW/pages/108102915/Parameters},
+  note         = {{Page} last updated 10 December 2019; accessed 24 September 2026}
+}
+
+@article{sevlian2018scaling,
+  author  = {Sevlian, Raffi and Rajagopal, Ram},
+  title   = {A Scaling Law for Short Term Load Forecasting on Varying Levels of Aggregation},
+  journal = {International Journal of Electrical Power \& Energy Systems},
+  volume  = {98},
+  pages   = {350--361},
+  year    = {2018},
+  doi     = {10.1016/j.ijepes.2017.10.032}
+}
+
+@article{guo2026loadshape,
+  author  = {Guo, Qi and Zhang, Ye and Hao, Qianpeng and Wang, Chao and Zhang, Yifan and Hu, SiLe and Hou, Kai},
+  title   = {Research on Multi-Algorithm Fusion Methods for Forecasting Typical Daily Load Profiles in Power System Planning for Target Years},
+  journal = {Frontiers in Energy Research},
+  volume  = {14},
+  pages   = {1699137},
+  year    = {2026},
+  doi     = {10.3389/fenrg.2026.1699137}
+}

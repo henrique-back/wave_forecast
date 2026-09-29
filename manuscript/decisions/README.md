@@ -57,6 +57,7 @@ Most decisions will never need promotion — the `log/` entry is the final recor
 | [025](log/025-peak-windows-per-batch.md) | `SoftPeakHeightLoss` peak-window detection: per-batch (not precomputed) | Kept, provisional | 2026-08-17 |
 | [026](log/026-composite-loss-ablation-combined-recipe.md) | Composite KL+Wasserstein+Peak loss ablation: `combined` recipe beats plain per-bin loss | Kept | 2026-08-21 |
 | [027](log/027-fixed-head-dim-nhead.md) | `head_dim=32`/`nhead=8` fixed (not searched) for `shape` target | Kept | 2026-09-11 |
+| [028](log/028-peak-loss-window-displacement-check.md) | `SoftPeakHeightLoss` windows stay fixed to the true spectrum — displaced peaks rare (~5%) | Kept | 2026-09-29 |
 
 Composite spectral loss (KL + Wasserstein + soft-max peak height) — see
 [`wasserstein_kl_justification.tex`](wasserstein_kl_justification.tex) directly; it was

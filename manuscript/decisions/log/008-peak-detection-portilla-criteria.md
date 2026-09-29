@@ -27,7 +27,8 @@ rejected if `fp > f_max` (default 0.4 Hz), its trough-to-trough partition energy
 2) bins on either side before the next trough, or it is sandwiched between two higher-energy
 neighboring peaks. The same module's `classify_partition`/`classify_partitions` additionally
 labels each peak `'wind_sea'` vs. `'swell'` via `γ* = S_obs(fp)/S_PM(fp)` against the
-Pierson-Moskowitz reference (threshold 1.0, per Violante-Carvalho 2009).
+Pierson-Moskowitz reference (threshold 1.0, per Portilla et al. 2009, section 3b, which
+builds on the JONSWAP-fitting wind-sea identification of Violante-Carvalho et al. 2002).
 
 ## Evidence
 
@@ -50,6 +51,8 @@ Code: `utils/spectral_partitioning.py::find_significant_peaks`,
 `utils/spectral_peaks.py::find_spectral_peaks`
 Other decisions: [[009]] (downstream use of this detector's output as an Optuna objective)
 Manuscript section this might feed: Methods — evaluation metrics, specifically the
-peak-detection/partitioning paragraph. Cite Portilla et al. (2009) and Violante-Carvalho
-(2009) — confirm both are in `literature/refs.bib` before drafting (per manuscript `CLAUDE.md`
-section 3, don't cite from memory).
+peak-detection/partitioning paragraph. Cite Portilla et al. (2009) and Violante-Carvalho et
+al. (2002), as `portilla2009` and `violantecarvalho2002`, both in `literature/refs.bib`. An
+earlier version of this entry said "Violante-Carvalho (2009)", which does not exist; the γ*
+test is Portilla's, and the 2002 paper is its precursor (see `literature/notes.md`, "Open
+issues").

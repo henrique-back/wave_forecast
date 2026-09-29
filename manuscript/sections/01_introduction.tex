@@ -1,1 +1,128 @@
-% !TeX root = ./main.tex
+% !TeX root = ../main.tex
+\section{Introduction}
+\label{sec:introduction}
+
+%% FLAG (see manuscript/CLAUDE.md §0.7): the wording below is deliberately neutral about how many
+%% stations the study covers, because the extension to three buoys with contrasting wave climates
+%% is planned but not yet run. Revisit every sentence marked SITE-COUNT once that is settled.
+%% FLAG: citation commands here use \citep/\citet (natbib author-year, correct for elsarticle's
+%% authoryear option). sections/02_methods.tex currently uses plain \cite{} throughout — the two
+%% should be made consistent before submission.
+
+Short-term forecasts of the sea state underpin a wide range of offshore and coastal activity,
+from the planning of installation and offloading windows to the assessment of extreme loads and
+lifetime fatigue on marine structures \citep{orimoloye2019bimodal}. Operationally, such forecasts
+are produced by numerical wave models (NWM), which integrate the wave energy balance equation
+forward in time given wind forcing, boundary conditions and bathymetry. They are conventionally
+expressed, distributed and verified in terms of a small number of integrated (bulk) parameters, chiefly the significant wave height $H_s$ and a characteristic period. This convention is deeply
+embedded in operational practice. Routine intercomparison of wave forecasts has long been
+established under the World Meteorological Organization (WMO), which now compares eighteen regional and global forecast systems verifying them against in situ buoy observations
+\citep{ecmwf2026lcwfvproject}. The fields exchanged for that verification are six integrated
+parameters: significant wave height, peak and mean zero-crossing periods, mean wave direction and the two components of the 10-m wind.
+
+Nevertheless, the bulk parameters are summaries of a richer quantity, and they are not a
+sufficient statistic for the purposes to which a forecast is ultimately put. The physically
+complete description of a sea state is the directional wave spectrum, from which every
+bulk parameter can in turn be derived, whereas the reverse does not hold \citep{holthuijsen2007}.
+Because the response of a coastal defence or a marine structure depends on \emph{where in
+frequency} the energy is situated, and not only on how much energy is present, two sea states
+carrying identical total energy --- and therefore identical $H_s$ --- need not behave alike \citet{orimoloye2019bimodal}. The point is sharpest in mixed seas, with double or multi-peaked spectra which no single height-period pair can represent \citep{portilla2009,violantecarvalho2002}.
+
+The directional spectrum, although complete, is poorly suited to routine comparison against
+observations. Operational buoys resolve only its first five directional moments, and existing estimators cannot accommodate more than two directional peaks and may introduce spurious energy \citep{gorman2018}. The frequency spectrum
+$E(f)$ carries no such ambiguity. It is estimated from the heave record alone, as $H_s$ is, and
+three of the four wave parameters exchanged for the WMO intercomparison ($H_s$, $T_p$ and $T_z$)
+are derived from it alone. Its absence from routine intercomparison reflects the sampling
+variability of individual spectral estimates and the absence of a standard spectral skill score
+in operational practice, rather than a limitation of the observation; where verification has
+been carried out at the level of spectral components, it has revealed model deficiencies that
+bulk statistics conceal \citep{hanson2009pacific}. $E(f)$ cannot separate wave systems that share a
+frequency band while travelling in different directions, but it resolves swell and wind sea
+whenever they are separated in frequency, and it retains the information identified
+above as lost in the bulk parameters. It is therefore the most complete description of the sea
+state that a buoy observes without additional assumptions.
+
+Independently of how the forecast is represented, the means of producing it has been changing. In
+meteorology, data-driven models are now evaluated
+head-to-head against operational numerical weather prediction systems under shared ground
+truth and shared metrics \citep{rasp2024weatherbench2}, and a first assessment in an
+operational-like setting reports accuracy comparable to that of a leading operational system for
+both global metrics and extreme events \citep{benbouallegue2024rise}. To our knowledge, comparable gains have been
+slower to materialise in ocean forecasting [INSERT: reference is likely needed]. The motivation for pursuing them is nonetheless
+substantial, and is chiefly one of cost: a NWM requires a full forcing chain and
+considerable computation, whereas a trained model maps recently observed conditions directly to a
+forecast, and has been shown to reproduce a numerical model's output at a small fraction of its
+computational expense \citep{james2018wave}, prompting the question of whether such models can act
+as physical-model surrogates at buoy scale \citep{minuzzi2023lstm}. By contrast with a NWM, however, a data-driven model learns the evolution of the sea state (swell dispersion,
+wind-sea growth and decay) implicitly from historical records rather than from an explicit
+physical parameterisation, and so obtains its speed at the expense of interpretability and of the
+physical guarantees a NWM provides by construction.
+
+Within ocean forecasting, data-driven work has concentrated overwhelmingly on the scalar bulk
+parameters rather than on the spectrum itself. From
+early artificial neural networks (ANNs) forecasting wave height and period
+\citep{makarynskyy2004}, through decomposition-based recurrent approaches to wave-height
+forecasting \citep{zhou2021emdlstm, ding2023eofeemd}, to recent transformer architectures
+\citep{kim2026metoformer}. Work that does engage with the spectrum generally addresses a different
+problem. One line estimates a spectrum, or its parametric descriptors, from bulk parameters or
+from measured platform response, rather than forecasting it forward in time
+\citep{naithani2005ann, namekar2006ann, sakhare2009svr, nielsen2023shipbuoy, kwon2026transformer}.
+A second reconstructs or predicts spectra over a spatial domain from atmospheric forcing
+\citep{song2023jpo, gao2025jgr, liu2025cnnxlstm, cao2025bohai}. Forecasting the spectrum forward
+in time from a station's own recent spectral history has received considerably less attention.
+
+Before proposing such a model, a further caution applies. In a comparison across sixteen buoys,
+\citet{jiang2024comment} found that autoregression, gradient boosting and several deep
+architectures performed almost identically for univariate significant-wave-height forecasting,
+and concluded that the complex models mostly recover the linear autocorrelation a simple baseline
+already exploits. We consider this critique sound and it shapes the present
+study in two ways. First, every forecast is evaluated against a linear and a persistence baseline,
+rather than assuming the more complex learned model has the advantage. Second, it leaves open whether the same conclusion holds when the target is the spectrum itself rather than a scalar derived from it.
+
+Answering that question is mainly a problem of measurement. When forecast quality is summarised
+by an error aggregated over the whole spectrum, an error confined to a narrow peak (one or two
+frequency bins out of several dozen) is diluted by the correctly predicted shoulders and tail. A forecast that merges distinct swell and wind-sea peaks into a single
+smooth hump can therefore score as well as one that resolves them, or better, and an aggregate
+criterion will prefer it. The effect has been seen before. A tendency to underestimate the
+spectral peak was reported for an early neural spectral estimator and corrected there with an
+empirical multiplier applied after the fact \citep{namekar2006ann}, and over-smoothing has been
+identified as characteristic of data-driven forecasting models in meteorology
+\citep{benbouallegue2024rise} and have already been reported in wave forecasting too \citep{minuzzi2023lstm}. The wave-modelling community has long recognised the underlying problem for NWMs. \citet{hanson2009pacific} note that mean or integral spectral properties give only
+a general measure of performance and can mask higher-order deficiencies, and for that reason they
+verify model output within individual wind-sea and swell partitions, an approach more recently applied to
+long-range spectral forecasts \citep{rogers2025espc}. A further complication arises when the models
+being compared were trained under different objectives. A model optimised for a given error measure tends
+to score well on that measure, so a comparison based on either model's training objective cannot show
+which model better represents the spectrum as a whole.
+
+To our knowledge, no study has yet forecast the wave spectrum autoregressively from a single
+station's own spectral history while treating the fidelity of the forecast spectral shape, and not
+an aggregate error, as the quantity to optimise and report. This paper makes four contributions.
+(i) We formulate spectral forecasting as sequence-to-sequence regression on the multi-channel
+spectrum measured at a buoy. The model is a transformer whose input embedding keeps the frequency
+axis as a structured dimension instead of flattening it, and whose output is parameterised
+logarithmically, so the recovered spectrum is non-negative by construction and needs no
+constrained output activation. (ii) We factorise the forecast target into a unit-area spectral
+shape and a scalar magnitude, forecast the two separately and recombine them at prediction time.
+This separates the comparatively easy magnitude problem from the harder shape problem. An
+analogous factorisation is established in short-term load forecasting
+\citep{sevlian2018scaling, guo2026loadshape}; here the magnitude is supplied by the physical
+relation between wave height and spectral energy. (iii) We train against a composite spectral
+objective combining a distributional divergence \citep{kullback1951}, an optimal-transport
+distance \citep{peyre2019} and a differentiable peak-height term. Each targets a kind of spectral
+error to which a per-bin criterion is insensitive, and model selection uses a criterion that does
+not reduce to any one of them. (iv) We evaluate with a peak-resolved diagnostic panel in which spectral
+peaks are identified by published significance criteria and classified as wind sea or swell \citep{portilla2009}, and forecast quality is reported separately for each class, so errors that an aggregate score would
+dilute stay visible. Each component of (iii) is admitted on evidence through an incremental protocol: a
+candidate is kept only if it improves the evaluation panel without degrading any other part of it,
+and only if its measured computational cost justifies the gain.
+
+The remainder of this paper is organised as follows. Section~\ref{sec:methods} presents the
+methodology: the problem formulation and the shape/magnitude decomposition of the forecast target
+(Section~\ref{sec:problem}), the buoy record and its preparation (Section~\ref{sec:data}), the
+model architecture (Section~\ref{sec:architecture}), the training procedure and hyperparameter
+search (Sections~\ref{sec:training} and~\ref{sec:hpo}), the evaluation protocol and its
+peak-resolved, partition-conditioned diagnostics (Section~\ref{sec:evaluation}), and the
+incremental ablation strategy under which each component was accepted or rejected
+(Section~\ref{sec:ablation}). Section~\ref{sec:results} reports the results, and
+Section~\ref{sec:discussion} discusses their implications and the limitations of the study.

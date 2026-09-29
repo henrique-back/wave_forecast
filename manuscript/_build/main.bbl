@@ -1,0 +1,225 @@
+\begin{thebibliography}{37}
+\expandafter\ifx\csname natexlab\endcsname\relax\def\natexlab#1{#1}\fi
+\providecommand{\url}[1]{\texttt{#1}}
+\providecommand{\href}[2]{#2}
+\providecommand{\path}[1]{#1}
+\providecommand{\DOIprefix}{doi:}
+\providecommand{\ArXivprefix}{arXiv:}
+\providecommand{\URLprefix}{URL: }
+\providecommand{\Pubmedprefix}{pmid:}
+\providecommand{\doi}[1]{\href{http://dx.doi.org/#1}{\path{#1}}}
+\providecommand{\Pubmed}[1]{\href{pmid:#1}{\path{#1}}}
+\providecommand{\bibinfo}[2]{#2}
+\ifx\xfnm\relax \def\xfnm[#1]{\unskip,\space#1}\fi
+%Type = Inproceedings
+\bibitem[{Akiba et~al.(2019)Akiba, Sano, Yanase, Ohta and Koyama}]{akiba2019optuna}
+\bibinfo{author}{Akiba, T.}, \bibinfo{author}{Sano, S.}, \bibinfo{author}{Yanase, T.}, \bibinfo{author}{Ohta, T.}, \bibinfo{author}{Koyama, M.}, \bibinfo{year}{2019}.
+\newblock \bibinfo{title}{Optuna: A next-generation hyperparameter optimization framework}, in: \bibinfo{booktitle}{Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining (KDD '19)}, pp. \bibinfo{pages}{2623--2631}.
+\newblock \DOIprefix\doi{10.1145/3292500.3330701}.
+%Type = Article
+\bibitem[{Ben~Bouall{\`e}gue et~al.(2024)Ben~Bouall{\`e}gue, Clare, Magnusson, Gasc{\'o}n, Maier-Gerber, Janou{\v{s}}ek, Rodwell, Pinault, Dramsch, Lang, Raoult, Rabier, Chevallier, Sandu, Dueben, Chantry and Pappenberger}]{benbouallegue2024rise}
+\bibinfo{author}{Ben~Bouall{\`e}gue, Z.}, \bibinfo{author}{Clare, M.C.A.}, \bibinfo{author}{Magnusson, L.}, \bibinfo{author}{Gasc{\'o}n, E.}, \bibinfo{author}{Maier-Gerber, M.}, \bibinfo{author}{Janou{\v{s}}ek, M.}, \bibinfo{author}{Rodwell, M.}, \bibinfo{author}{Pinault, F.}, \bibinfo{author}{Dramsch, J.S.}, \bibinfo{author}{Lang, S.T.K.}, \bibinfo{author}{Raoult, B.}, \bibinfo{author}{Rabier, F.}, \bibinfo{author}{Chevallier, M.}, \bibinfo{author}{Sandu, I.}, \bibinfo{author}{Dueben, P.}, \bibinfo{author}{Chantry, M.}, \bibinfo{author}{Pappenberger, F.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{The rise of data-driven weather forecasting: A first statistical assessment of machine learning-based weather forecasts in an operational-like context}.
+\newblock \bibinfo{journal}{Bulletin of the American Meteorological Society} \bibinfo{volume}{105}, \bibinfo{pages}{E864--E883}.
+\newblock \DOIprefix\doi{10.1175/BAMS-D-23-0162.1}.
+%Type = Inproceedings
+\bibitem[{Bengio et~al.(2015)Bengio, Vinyals, Jaitly and Shazeer}]{bengio2015scheduledsampling}
+\bibinfo{author}{Bengio, S.}, \bibinfo{author}{Vinyals, O.}, \bibinfo{author}{Jaitly, N.}, \bibinfo{author}{Shazeer, N.}, \bibinfo{year}{2015}.
+\newblock \bibinfo{title}{Scheduled sampling for sequence prediction with recurrent neural networks}, in: \bibinfo{booktitle}{Advances in Neural Information Processing Systems 28 (NeurIPS 2015)}, pp. \bibinfo{pages}{1171--1179}.
+%Type = Inproceedings
+\bibitem[{Bergstra et~al.(2011)Bergstra, Bardenet, Bengio and K{\'e}gl}]{bergstra2011tpe}
+\bibinfo{author}{Bergstra, J.}, \bibinfo{author}{Bardenet, R.}, \bibinfo{author}{Bengio, Y.}, \bibinfo{author}{K{\'e}gl, B.}, \bibinfo{year}{2011}.
+\newblock \bibinfo{title}{Algorithms for hyper-parameter optimization}, in: \bibinfo{booktitle}{Advances in Neural Information Processing Systems 24 (NeurIPS 2011)}, pp. \bibinfo{pages}{2546--2554}.
+%Type = Article
+\bibitem[{Cao et~al.(2025)Cao, Zuo, Wang, Wang, Niu, Wang and Lv}]{cao2025bohai}
+\bibinfo{author}{Cao, X.}, \bibinfo{author}{Zuo, M.}, \bibinfo{author}{Wang, X.}, \bibinfo{author}{Wang, Z.}, \bibinfo{author}{Niu, Y.}, \bibinfo{author}{Wang, P.}, \bibinfo{author}{Lv, Y.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{The method of single points wave spectrum generation for regional sea based on multimodal model in the bohai sea, china}.
+\newblock \bibinfo{journal}{Dynamics of Atmospheres and Oceans} \bibinfo{volume}{111}, \bibinfo{pages}{101586}.
+\newblock \DOIprefix\doi{10.1016/j.dynatmoce.2025.101586}.
+%Type = Article
+\bibitem[{Ding et~al.(2023)Ding, Deng, Liu and Wang}]{ding2023eofeemd}
+\bibinfo{author}{Ding, J.}, \bibinfo{author}{Deng, F.}, \bibinfo{author}{Liu, Q.}, \bibinfo{author}{Wang, J.}, \bibinfo{year}{2023}.
+\newblock \bibinfo{title}{Regional forecasting of significant wave height and mean wave period using eof-eemd-scinet hybrid model}.
+\newblock \bibinfo{journal}{Applied Ocean Research} \bibinfo{volume}{136}, \bibinfo{pages}{103582}.
+\newblock \DOIprefix\doi{10.1016/j.apor.2023.103582}.
+%Type = Misc
+\bibitem[{{ECMWF}(2026)}]{ecmwf2026lcwfvproject}
+\bibinfo{author}{{ECMWF}}, \bibinfo{year}{2026}.
+\newblock \bibinfo{title}{Project -- {WMO Lead Centre for Wave Forecast Verification (LC-WFV)}}.
+\newblock \bibinfo{howpublished}{European Centre for Medium-Range Weather Forecasts, Confluence documentation}.
+\newblock \URLprefix \url{https://confluence.ecmwf.int/spaces/WLW/pages/104238338/Project}. \bibinfo{note}{{Page} last updated 22 April 2026; accessed 24 September 2026}.
+%Type = Article
+\bibitem[{Gao and Jiang(2025)}]{gao2025jgr}
+\bibinfo{author}{Gao, T.}, \bibinfo{author}{Jiang, H.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{Physics-guided deep learning for modeling single-point wave spectra using wind inputs of two resolutions}.
+\newblock \bibinfo{journal}{JGR Machine Learning and Computation} \bibinfo{volume}{2}, \bibinfo{pages}{e2024JH000492}.
+\newblock \DOIprefix\doi{10.1029/2024JH000492}.
+%Type = Article
+\bibitem[{Gorman(2018)}]{gorman2018}
+\bibinfo{author}{Gorman, R.M.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{Estimation of directional spectra from wave buoys for model validation}.
+\newblock \bibinfo{journal}{Procedia IUTAM} \bibinfo{volume}{26}, \bibinfo{pages}{81--91}.
+\newblock \DOIprefix\doi{10.1016/j.piutam.2018.03.008}.
+%Type = Article
+\bibitem[{Guo et~al.(2026)Guo, Zhang, Hao, Wang, Zhang, Hu and Hou}]{guo2026loadshape}
+\bibinfo{author}{Guo, Q.}, \bibinfo{author}{Zhang, Y.}, \bibinfo{author}{Hao, Q.}, \bibinfo{author}{Wang, C.}, \bibinfo{author}{Zhang, Y.}, \bibinfo{author}{Hu, S.}, \bibinfo{author}{Hou, K.}, \bibinfo{year}{2026}.
+\newblock \bibinfo{title}{Research on multi-algorithm fusion methods for forecasting typical daily load profiles in power system planning for target years}.
+\newblock \bibinfo{journal}{Frontiers in Energy Research} \bibinfo{volume}{14}, \bibinfo{pages}{1699137}.
+\newblock \DOIprefix\doi{10.3389/fenrg.2026.1699137}.
+%Type = Article
+\bibitem[{Hanson et~al.(2009)Hanson, Tracy, Tolman and Scott}]{hanson2009pacific}
+\bibinfo{author}{Hanson, J.L.}, \bibinfo{author}{Tracy, B.A.}, \bibinfo{author}{Tolman, H.L.}, \bibinfo{author}{Scott, R.D.}, \bibinfo{year}{2009}.
+\newblock \bibinfo{title}{Pacific hindcast performance of three numerical wave models}.
+\newblock \bibinfo{journal}{Journal of Atmospheric and Oceanic Technology} \bibinfo{volume}{26}, \bibinfo{pages}{1614--1633}.
+\newblock \DOIprefix\doi{10.1175/2009JTECHO650.1}.
+%Type = Book
+\bibitem[{Holthuijsen(2007)}]{holthuijsen2007}
+\bibinfo{author}{Holthuijsen, L.H.}, \bibinfo{year}{2007}.
+\newblock \bibinfo{title}{Waves in Oceanic and Coastal Waters}.
+\newblock \bibinfo{publisher}{Cambridge University Press}.
+%Type = Article
+\bibitem[{James et~al.(2018)James, Zhang and O'Donncha}]{james2018wave}
+\bibinfo{author}{James, S.C.}, \bibinfo{author}{Zhang, Y.}, \bibinfo{author}{O'Donncha, F.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{A machine learning framework to forecast wave conditions}.
+\newblock \bibinfo{journal}{Coastal Engineering} \bibinfo{volume}{137}, \bibinfo{pages}{1--10}.
+\newblock \DOIprefix\doi{10.1016/j.coastaleng.2018.03.004}.
+%Type = Article
+\bibitem[{Jiang et~al.(2024)Jiang, Zhang, Qian and Wang}]{jiang2024comment}
+\bibinfo{author}{Jiang, H.}, \bibinfo{author}{Zhang, Y.}, \bibinfo{author}{Qian, C.}, \bibinfo{author}{Wang, X.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{Comment on papers using machine learning for significant wave height time series prediction: Complex models do not outperform auto-regression}.
+\newblock \bibinfo{journal}{Ocean Modelling} \bibinfo{volume}{189}, \bibinfo{pages}{102364}.
+\newblock \DOIprefix\doi{10.1016/j.ocemod.2024.102364}.
+%Type = Article
+\bibitem[{Kim et~al.(2026)Kim, Kwon, Lee and Seok}]{kim2026metoformer}
+\bibinfo{author}{Kim, Y.}, \bibinfo{author}{Kwon, C.}, \bibinfo{author}{Lee, H.}, \bibinfo{author}{Seok, J.}, \bibinfo{year}{2026}.
+\newblock \bibinfo{title}{A multi-scale and horizon-adaptive transformer for operational metocean forecasting in korean coastal buoy networks}.
+\newblock \bibinfo{journal}{Ocean Engineering} \bibinfo{volume}{362}, \bibinfo{pages}{126344}.
+\newblock \DOIprefix\doi{10.1016/j.oceaneng.2026.126344}.
+%Type = Article
+\bibitem[{Kullback and Leibler(1951)}]{kullback1951}
+\bibinfo{author}{Kullback, S.}, \bibinfo{author}{Leibler, R.A.}, \bibinfo{year}{1951}.
+\newblock \bibinfo{title}{On information and sufficiency}.
+\newblock \bibinfo{journal}{Annals of Mathematical Statistics} \bibinfo{volume}{22}, \bibinfo{pages}{79--86}.
+\newblock \DOIprefix\doi{10.1214/aoms/1177729694}.
+%Type = Article
+\bibitem[{Kwon et~al.(2026)Kwon, Jin, Kim and Kim}]{kwon2026transformer}
+\bibinfo{author}{Kwon, D.S.}, \bibinfo{author}{Jin, C.}, \bibinfo{author}{Kim, M.}, \bibinfo{author}{Kim, S.J.}, \bibinfo{year}{2026}.
+\newblock \bibinfo{title}{Transformers and neural networks for estimation of parameters of multi-directional waves from rich statistics of fpso motion signals}.
+\newblock \bibinfo{journal}{Applied Ocean Research} \bibinfo{volume}{166}, \bibinfo{pages}{104927}.
+\newblock \DOIprefix\doi{10.1016/j.apor.2026.104927}.
+%Type = Article
+\bibitem[{Liu et~al.(2025)Liu, Li, Hu, Ren and Xu}]{liu2025cnnxlstm}
+\bibinfo{author}{Liu, Y.}, \bibinfo{author}{Li, R.}, \bibinfo{author}{Hu, W.}, \bibinfo{author}{Ren, P.}, \bibinfo{author}{Xu, C.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{Regional wave spectra prediction method based on deep learning}.
+\newblock \bibinfo{journal}{Journal of Marine Science and Engineering} \bibinfo{volume}{13}, \bibinfo{pages}{1461}.
+\newblock \DOIprefix\doi{10.3390/jmse13081461}.
+%Type = Inproceedings
+\bibitem[{Loshchilov and Hutter(2019)}]{loshchilov2019adamw}
+\bibinfo{author}{Loshchilov, I.}, \bibinfo{author}{Hutter, F.}, \bibinfo{year}{2019}.
+\newblock \bibinfo{title}{Decoupled weight decay regularization}, in: \bibinfo{booktitle}{7th International Conference on Learning Representations (ICLR 2019)}.
+%Type = Article
+\bibitem[{Makarynskyy(2004)}]{makarynskyy2004}
+\bibinfo{author}{Makarynskyy, O.}, \bibinfo{year}{2004}.
+\newblock \bibinfo{title}{Improving wave predictions with artificial neural networks}.
+\newblock \bibinfo{journal}{Ocean Engineering} \bibinfo{volume}{31}, \bibinfo{pages}{709--724}.
+\newblock \DOIprefix\doi{10.1016/j.oceaneng.2003.05.003}.
+%Type = Article
+\bibitem[{Minuzzi and Farina(2023)}]{minuzzi2023lstm}
+\bibinfo{author}{Minuzzi, F.C.}, \bibinfo{author}{Farina, L.}, \bibinfo{year}{2023}.
+\newblock \bibinfo{title}{A deep learning approach to predict significant wave height using long short-term memory}.
+\newblock \bibinfo{journal}{Ocean Modelling} \bibinfo{volume}{181}, \bibinfo{pages}{102151}.
+\newblock \DOIprefix\doi{10.1016/j.ocemod.2022.102151}.
+%Type = Article
+\bibitem[{Naithani and Deo(2005)}]{naithani2005ann}
+\bibinfo{author}{Naithani, R.}, \bibinfo{author}{Deo, M.C.}, \bibinfo{year}{2005}.
+\newblock \bibinfo{title}{Estimation of wave spectral shapes using ann}.
+\newblock \bibinfo{journal}{Advances in Engineering Software} \bibinfo{volume}{36}, \bibinfo{pages}{750--756}.
+\newblock \DOIprefix\doi{10.1016/j.advengsoft.2005.03.021}.
+%Type = Article
+\bibitem[{Namekar and Deo(2006)}]{namekar2006ann}
+\bibinfo{author}{Namekar, S.}, \bibinfo{author}{Deo, M.C.}, \bibinfo{year}{2006}.
+\newblock \bibinfo{title}{Application of artificial neural network model in estimation of wave spectra}.
+\newblock \bibinfo{journal}{Journal of Waterway, Port, Coastal, and Ocean Engineering} \bibinfo{volume}{132}, \bibinfo{pages}{415--418}.
+\newblock \DOIprefix\doi{10.1061/(ASCE)0733-950X(2006)132:5(415)}.
+%Type = Article
+\bibitem[{Nielsen et~al.(2023)Nielsen, Mittendorf, Shao and Storhaug}]{nielsen2023shipbuoy}
+\bibinfo{author}{Nielsen, U.D.}, \bibinfo{author}{Mittendorf, M.}, \bibinfo{author}{Shao, Y.}, \bibinfo{author}{Storhaug, G.}, \bibinfo{year}{2023}.
+\newblock \bibinfo{title}{Wave spectrum estimation conditioned on machine learning-based output using the wave buoy analogy}.
+\newblock \bibinfo{journal}{Marine Structures} \bibinfo{volume}{91}, \bibinfo{pages}{103470}.
+\newblock \DOIprefix\doi{10.1016/j.marstruc.2023.103470}.
+%Type = Article
+\bibitem[{Orimoloye et~al.(2019)Orimoloye, Karunarathna and Reeve}]{orimoloye2019bimodal}
+\bibinfo{author}{Orimoloye, S.}, \bibinfo{author}{Karunarathna, H.}, \bibinfo{author}{Reeve, D.E.}, \bibinfo{year}{2019}.
+\newblock \bibinfo{title}{Effects of swell on wave height distribution of energy-conserved bimodal seas}.
+\newblock \bibinfo{journal}{Journal of Marine Science and Engineering} \bibinfo{volume}{7}, \bibinfo{pages}{79}.
+\newblock \DOIprefix\doi{10.3390/jmse7030079}.
+%Type = Article
+\bibitem[{Peyr{\'e} and Cuturi(2019)}]{peyre2019}
+\bibinfo{author}{Peyr{\'e}, G.}, \bibinfo{author}{Cuturi, M.}, \bibinfo{year}{2019}.
+\newblock \bibinfo{title}{Computational optimal transport}.
+\newblock \bibinfo{journal}{Foundations and Trends in Machine Learning} \bibinfo{volume}{11}, \bibinfo{pages}{355--607}.
+\newblock \DOIprefix\doi{10.1561/2200000073}.
+%Type = Article
+\bibitem[{Portilla et~al.(2009)Portilla, Ocampo-Torres and Monbaliu}]{portilla2009}
+\bibinfo{author}{Portilla, J.}, \bibinfo{author}{Ocampo-Torres, F.J.}, \bibinfo{author}{Monbaliu, J.}, \bibinfo{year}{2009}.
+\newblock \bibinfo{title}{Spectral partitioning and identification of wind sea and swell}.
+\newblock \bibinfo{journal}{Journal of Atmospheric and Oceanic Technology} \bibinfo{volume}{26}, \bibinfo{pages}{107--122}.
+\newblock \DOIprefix\doi{10.1175/2008JTECHO609.1}.
+%Type = Article
+\bibitem[{Rasp et~al.(2024)Rasp, Hoyer, Merose, Langmore, Battaglia, Russell, Sanchez-Gonzalez, Yang, Carver, Agrawal, Chantry, Ben~Bouallegue, Dueben, Bromberg, Sisk, Barrington, Bell and Sha}]{rasp2024weatherbench2}
+\bibinfo{author}{Rasp, S.}, \bibinfo{author}{Hoyer, S.}, \bibinfo{author}{Merose, A.}, \bibinfo{author}{Langmore, I.}, \bibinfo{author}{Battaglia, P.}, \bibinfo{author}{Russell, T.}, \bibinfo{author}{Sanchez-Gonzalez, A.}, \bibinfo{author}{Yang, V.}, \bibinfo{author}{Carver, R.}, \bibinfo{author}{Agrawal, S.}, \bibinfo{author}{Chantry, M.}, \bibinfo{author}{Ben~Bouallegue, Z.}, \bibinfo{author}{Dueben, P.}, \bibinfo{author}{Bromberg, C.}, \bibinfo{author}{Sisk, J.}, \bibinfo{author}{Barrington, L.}, \bibinfo{author}{Bell, A.}, \bibinfo{author}{Sha, F.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{{WeatherBench 2}: A benchmark for the next generation of data-driven global weather models}.
+\newblock \bibinfo{journal}{Journal of Advances in Modeling Earth Systems} \bibinfo{volume}{16}, \bibinfo{pages}{e2023MS004019}.
+\newblock \DOIprefix\doi{10.1029/2023MS004019}.
+%Type = Techreport
+\bibitem[{Rogers and Janiga(2025)}]{rogers2025espc}
+\bibinfo{author}{Rogers, W.E.}, \bibinfo{author}{Janiga, M.A.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{Skill of Long-Range Forecasts of Ocean Wave Spectra from the Navy ESPC Version 2 System}.
+\newblock \bibinfo{type}{Technical Report}. Naval Research Laboratory.
+\newblock \bibinfo{note}{NRL Memorandum Report; preprint at arXiv:2510.06484}.
+%Type = Article
+\bibitem[{Sakhare and Deo(2009)}]{sakhare2009svr}
+\bibinfo{author}{Sakhare, S.}, \bibinfo{author}{Deo, M.C.}, \bibinfo{year}{2009}.
+\newblock \bibinfo{title}{Derivation of wave spectrum using data driven methods}.
+\newblock \bibinfo{journal}{Marine Structures} \bibinfo{volume}{22}, \bibinfo{pages}{594--609}.
+\newblock \DOIprefix\doi{10.1016/j.marstruc.2008.12.004}.
+%Type = Article
+\bibitem[{Schmid(2010)}]{schmid2010dmd}
+\bibinfo{author}{Schmid, P.J.}, \bibinfo{year}{2010}.
+\newblock \bibinfo{title}{Dynamic mode decomposition of numerical and experimental data}.
+\newblock \bibinfo{journal}{Journal of Fluid Mechanics} \bibinfo{volume}{656}, \bibinfo{pages}{5--28}.
+\newblock \DOIprefix\doi{10.1017/S0022112010001217}.
+%Type = Article
+\bibitem[{Sevlian and Rajagopal(2018)}]{sevlian2018scaling}
+\bibinfo{author}{Sevlian, R.}, \bibinfo{author}{Rajagopal, R.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{A scaling law for short term load forecasting on varying levels of aggregation}.
+\newblock \bibinfo{journal}{International Journal of Electrical Power \& Energy Systems} \bibinfo{volume}{98}, \bibinfo{pages}{350--361}.
+\newblock \DOIprefix\doi{10.1016/j.ijepes.2017.10.032}.
+%Type = Article
+\bibitem[{Song and Jiang(2023)}]{song2023jpo}
+\bibinfo{author}{Song, Y.}, \bibinfo{author}{Jiang, H.}, \bibinfo{year}{2023}.
+\newblock \bibinfo{title}{A deep learning-based approach for empirical modeling of single-point wave spectra in open oceans}.
+\newblock \bibinfo{journal}{Journal of Physical Oceanography} \bibinfo{volume}{53}.
+\newblock \DOIprefix\doi{10.1175/JPO-D-22-0198.1}.
+%Type = Inproceedings
+\bibitem[{Vaswani et~al.(2017)Vaswani, Shazeer, Parmar, Uszkoreit, Jones, Gomez, Kaiser and Polosukhin}]{vaswani2017attention}
+\bibinfo{author}{Vaswani, A.}, \bibinfo{author}{Shazeer, N.}, \bibinfo{author}{Parmar, N.}, \bibinfo{author}{Uszkoreit, J.}, \bibinfo{author}{Jones, L.}, \bibinfo{author}{Gomez, A.N.}, \bibinfo{author}{Kaiser, L.}, \bibinfo{author}{Polosukhin, I.}, \bibinfo{year}{2017}.
+\newblock \bibinfo{title}{Attention is all you need}, in: \bibinfo{booktitle}{Advances in Neural Information Processing Systems 30 (NeurIPS 2017)}, pp. \bibinfo{pages}{5998--6008}.
+%Type = Article
+\bibitem[{Violante-Carvalho et~al.(2002)Violante-Carvalho, Parente, Robinson and Nunes}]{violantecarvalho2002}
+\bibinfo{author}{Violante-Carvalho, N.}, \bibinfo{author}{Parente, C.E.}, \bibinfo{author}{Robinson, I.S.}, \bibinfo{author}{Nunes, L.M.P.}, \bibinfo{year}{2002}.
+\newblock \bibinfo{title}{On the growth of wind-generated waves in a swell-dominated region in the south atlantic}.
+\newblock \bibinfo{journal}{Journal of Offshore Mechanics and Arctic Engineering} \bibinfo{volume}{124}, \bibinfo{pages}{14--21}.
+\newblock \DOIprefix\doi{10.1115/1.1423636}.
+%Type = Inproceedings
+\bibitem[{Xiong et~al.(2020)Xiong, Yang, He, Zheng, Zheng, Xing, Zhang, Lan, Wang and Liu}]{xiong2020prenorm}
+\bibinfo{author}{Xiong, R.}, \bibinfo{author}{Yang, Y.}, \bibinfo{author}{He, D.}, \bibinfo{author}{Zheng, K.}, \bibinfo{author}{Zheng, S.}, \bibinfo{author}{Xing, C.}, \bibinfo{author}{Zhang, H.}, \bibinfo{author}{Lan, Y.}, \bibinfo{author}{Wang, L.}, \bibinfo{author}{Liu, T.Y.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{On layer normalization in the transformer architecture}, in: \bibinfo{booktitle}{Proceedings of the 37th International Conference on Machine Learning (ICML 2020)}, pp. \bibinfo{pages}{10524--10533}.
+%Type = Article
+\bibitem[{Zhou et~al.(2021)Zhou, Bethel, Sun, Zhao, Xie and Dong}]{zhou2021emdlstm}
+\bibinfo{author}{Zhou, S.}, \bibinfo{author}{Bethel, B.J.}, \bibinfo{author}{Sun, W.}, \bibinfo{author}{Zhao, Y.}, \bibinfo{author}{Xie, W.}, \bibinfo{author}{Dong, C.}, \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{Improving significant wave height forecasts using a joint empirical mode decomposition--long short-term memory network}.
+\newblock \bibinfo{journal}{Journal of Marine Science and Engineering} \bibinfo{volume}{9}, \bibinfo{pages}{744}.
+\newblock \DOIprefix\doi{10.3390/jmse9070744}.
+
+\end{thebibliography}
