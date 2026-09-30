@@ -18,3 +18,4 @@ matplotlib==3.10.8
 tqdm==4.67.3
 joblib==1.5.3
 pytest==9.0.3
+h5py==3.16.0  # only for scripts/fetch_gefs_reforecast.py (NetCDF4/HDF5 reader)

@@ -9,9 +9,10 @@ implementation instead of drifting apart.
 import numpy as np
 import torch
 
-from utils import get_start_token, compute_bulk_params, trapz_weights
+from utils import (get_start_token, compute_bulk_params, trapz_weights, RMSELoss,
+                   SpectralWassersteinLoss, peak_modality_metrics)
 from nn.checkpoints import find_checkpoint, build_model
-from nn.optimization import _prepare_dataloaders
+from nn.optimization import _prepare_dataloaders, _compute_val_score
 
 M0_MASK_THRESHOLD = 1e-4  # m²; matches nn/evaluate.py
 
@@ -238,3 +239,104 @@ def compute_density_metrics(pred_np, true_np, pers_np, freqs_np):
         'Shape_RMSE': shape_rmse, 'Shape_masked_samples': n_masked,
         'SI_per_bin': si_per_bin.tolist(), 'SI_mean': float((si_per_bin * freq_w).sum()),
     }
+
+
+def compute_shape_final_metrics(freqs_np, pred, true, pers, m0_true=None):
+    """Final-step 'shape'-target metrics for externally supplied forecasts.
+
+    Reproduces nn/evaluate.py's shape block (Shape_RMSE/SS, Shape_Wasserstein,
+    Tm02, per-bin RMSE/Bias/SI, the peak panel and its unimodal/multimodal
+    buckets) from the same building blocks, on plain numpy arrays, so a
+    forecast that has no torch model behind it (e.g. a numerical wave model's
+    spectrum, see scripts/compare_physical_baseline.py) is scored exactly like
+    the transformer. evaluate() itself is unchanged; tests/
+    test_shape_final_metrics.py pins the parity between the two.
+
+    Parameters
+    ----------
+    freqs_np : np.ndarray, shape (F,)
+    pred, true, pers : np.ndarray, shape (N, F)
+        Linear (not log) unit-area shapes on `freqs_np`, final forecast step.
+    m0_true : np.ndarray, shape (N,) | None
+        Physical m0 of each true spectrum. When given, the peak panel is fed
+        (shape * m0) so its wind-sea/swell labels (gamma* against a
+        Pierson-Moskowitz reference in m^2/Hz) are computed in the units they
+        are defined for; every other peak metric is invariant to that common
+        scaling. When None, the unit-area shapes are passed as evaluate()
+        currently does (labels off by a factor m0 — see
+        manuscript/decisions/log/029).
+
+    Returns
+    -------
+    dict — evaluate()'s final-step shape keys, plus Shape_RMSE_pers,
+    Shape_Wasserstein_pers, peak_fidelity_SS and n_samples.
+    """
+    freqs_np = np.asarray(freqs_np, dtype=np.float64)
+    pred, true, pers = (np.asarray(a, dtype=np.float64) for a in (pred, true, pers))
+    freqs_t = torch.from_numpy(freqs_np)
+    weights = torch.from_numpy(trapz_weights(freqs_np))
+    pred_t, true_t, pers_t = (torch.from_numpy(a) for a in (pred, true, pers))
+
+    rmse_fn = RMSELoss()
+    shape_rmse = rmse_fn(pred_t, true_t, weights=weights).item()
+    shape_rmse_pers = rmse_fn(pers_t, true_t, weights=weights).item()
+
+    # SpectralWassersteinLoss takes log inputs; clamp so a zero (or clipped
+    # negative) bin gives a finite log rather than -inf/NaN.
+    def _log(x):
+        return torch.log(x.clamp(min=1e-12))
+
+    wasserstein_fn = SpectralWassersteinLoss()
+    shape_w = wasserstein_fn(_log(pred_t), _log(true_t), freqs_t).item()
+    shape_w_pers = wasserstein_fn(_log(pers_t), _log(true_t), freqs_t).item()
+
+    _, tm02_pred = compute_bulk_params(pred, freqs_np)
+    _, tm02_true = compute_bulk_params(true, freqs_np)
+    tm02_err = tm02_pred - tm02_true
+
+    rmse_per_bin = np.sqrt(((pred - true) ** 2).mean(axis=0))
+    rmse_per_bin_pers = np.sqrt(((pers - true) ** 2).mean(axis=0))
+    bias_per_bin = (pred - true).mean(axis=0)
+    si_per_bin = rmse_per_bin / true.mean(axis=0).clip(min=1e-12)
+
+    if m0_true is None:
+        peak_pred, peak_true = pred, true
+    else:
+        m0 = np.asarray(m0_true, dtype=np.float64)[:, np.newaxis]
+        peak_pred, peak_true = pred * m0, true * m0
+    peak_metrics, multimodal_mask = peak_modality_metrics(freqs_np, peak_pred, peak_true)
+    mask_t = torch.from_numpy(multimodal_mask)
+
+    def _bucket(mask):
+        if mask.sum() == 0:
+            return float('nan'), float('nan')
+        r = rmse_fn(pred_t[mask], true_t[mask], weights=weights).item()
+        rp = rmse_fn(pers_t[mask], true_t[mask], weights=weights).item()
+        return r, (1.0 - r / rp if rp > 0 else float('nan'))
+
+    rmse_uni, ss_uni = _bucket(~mask_t)
+    rmse_multi, ss_multi = _bucket(mask_t)
+
+    metrics = {
+        'n_samples': int(pred.shape[0]),
+        'Shape_RMSE': shape_rmse,
+        'Shape_RMSE_pers': shape_rmse_pers,
+        'Shape_SS': 1.0 - shape_rmse / shape_rmse_pers if shape_rmse_pers > 0 else float('nan'),
+        'Shape_Wasserstein': shape_w,
+        'Shape_Wasserstein_pers': shape_w_pers,
+        'Tm02_RMSE': float(np.sqrt(np.mean(tm02_err ** 2))),
+        'Tm02_Bias': float(np.mean(tm02_err)),
+        'RMSE_per_bin': rmse_per_bin.tolist(),
+        'RMSE_per_bin_pers': rmse_per_bin_pers.tolist(),
+        'Bias_per_bin': bias_per_bin.tolist(),
+        'SI_per_bin': si_per_bin.tolist(),
+        **peak_metrics,
+        'Shape_unimodal_samples': int((~multimodal_mask).sum()),
+        'Shape_multimodal_samples': int(multimodal_mask.sum()),
+        'Shape_RMSE_unimodal': rmse_uni,
+        'Shape_SS_unimodal': ss_uni,
+        'Shape_RMSE_multimodal': rmse_multi,
+        'Shape_SS_multimodal': ss_multi,
+    }
+    metrics['peak_fidelity_SS'] = _compute_val_score(metrics, 'peak_fidelity_SS')
+    return metrics
