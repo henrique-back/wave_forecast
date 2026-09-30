@@ -58,6 +58,8 @@ Most decisions will never need promotion — the `log/` entry is the final recor
 | [026](log/026-composite-loss-ablation-combined-recipe.md) | Composite KL+Wasserstein+Peak loss ablation: `combined` recipe beats plain per-bin loss | Kept | 2026-08-21 |
 | [027](log/027-fixed-head-dim-nhead.md) | `head_dim=32`/`nhead=8` fixed (not searched) for `shape` target | Kept | 2026-09-11 |
 | [028](log/028-peak-loss-window-displacement-check.md) | `SoftPeakHeightLoss` windows stay fixed to the true spectrum — displaced peaks rare (~5%) | Kept | 2026-09-29 |
+| [029](log/029-gamma-star-physical-labels.md) | γ\* wind-sea/swell labels on the physical spectrum, not the shape (19.9% of test partitions flip); `evaluate()` fixed in 030 | Kept | 2026-09-30 |
+| [030](log/030-peak-detector-trough-criterion-combining.md) | Peak detector: criterion 3 to the trough + Portilla combining; physical labels in `evaluate()` — v13 PF 0.58 → −0.05 (12 h val), GEFS ranking reverses | Kept | 2026-09-30 |
 
 Composite spectral loss (KL + Wasserstein + soft-max peak height) — see
 [`wasserstein_kl_justification.tex`](wasserstein_kl_justification.tex) directly; it was

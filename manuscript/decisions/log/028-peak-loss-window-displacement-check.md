@@ -83,11 +83,16 @@ Kept: the loss is unchanged and only the text was corrected. Re-measure if spuri
 peaks are reduced, since the in-window rates depend on how many peaks the model predicts, or if
 a model trained without the peak term is ever compared.
 
+**Update 2026-09-30 ([[030]]):** all numbers above use the old detector, which kept far too
+many peaks (criterion 3 was effectively inactive and spurious partitions were not combined).
+The 3.69 true and 7.88 predicted peaks per spectrum, and the 5-bin-scale windows, are symptoms
+of that. Re-measure with the [[030]] detector before quoting them.
+
 ## Related
 
 Code: `utils/loss.py::SoftPeakHeightLoss`, `nn/training_loop.py::_peak_windows_for_batch`,
 `scripts/check_peak_windows.py`
-Other decisions: [[008]] (peak detector), [[009]] (peak-fidelity objective), [[025]]
+Other decisions: [[008]] (peak detector), [[009]] (peak-fidelity objective), [[030]] (detector fix), [[025]]
 (per-batch window detection), [[026]] (composite loss)
 Manuscript section this might feed: Methods — loss function, peak-height term (already
 updated).

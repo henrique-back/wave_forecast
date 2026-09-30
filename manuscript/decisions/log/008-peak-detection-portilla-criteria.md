@@ -45,11 +45,16 @@ Kept. This is the peak detector `nn/evaluate.py` and `utils/spectral_peaks.py` c
 call for all peak-modality and Tm02-per-partition metrics (`peak_modality_metrics`,
 `Tm02_RMSE_windsea`/`_swell`).
 
+**Update 2026-09-30 ([[030]]):** the implementation departed from the criteria as written
+here. Criterion 3 counted bins to the neighbouring maximum instead of the trough, and
+spurious partitions were dropped instead of combined into a neighbour. Both are fixed in
+[[030]]; the criteria described above are unchanged.
+
 ## Related
 
 Code: `utils/spectral_partitioning.py::find_significant_peaks`,
 `utils/spectral_peaks.py::find_spectral_peaks`
-Other decisions: [[009]] (downstream use of this detector's output as an Optuna objective)
+Other decisions: [[009]] (downstream use of this detector's output as an Optuna objective), [[030]] (criterion 3 and combining fixed)
 Manuscript section this might feed: Methods — evaluation metrics, specifically the
 peak-detection/partitioning paragraph. Cite Portilla et al. (2009) and Violante-Carvalho et
 al. (2002), as `portilla2009` and `violantecarvalho2002`, both in `literature/refs.bib`. An
