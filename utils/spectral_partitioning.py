@@ -139,11 +139,19 @@ def find_significant_peaks(
     """
     Portilla et al. (2009) 1D spurious peak removal (section 2b.2).
 
-    Four criteria mark a peak as spurious:
+    Every local maximum starts as the peak of a partition bounded by the
+    minima to its neighbouring maxima. Four criteria mark a partition as
+    spurious:
       1. fp > f_max (0.35–0.4 Hz) — tail noise
       2. partition energy < energy_frac * E_total (5%–8%)
-      3. fewer than min_bins spectral bins before or after the peak
+      3. fewer than min_bins spectral bins between the peak and either
+         partition limit (trough)
       4. peak sits between two higher-energy neighbors (local sandwich)
+
+    Spurious partitions are combined into a neighbour, not dropped, and
+    the criteria are re-checked on the combined partitions — see
+    _combined_partitions for the order, which Portilla et al. leave open
+    (manuscript/decisions/log/030).
 
     Parameters
     ----------
@@ -157,56 +165,72 @@ def find_significant_peaks(
     -------
     List of indices of significant peaks.
     """
-    from scipy.signal import find_peaks
-
-    # All local maxima (raw)
-    raw_peaks, _ = find_peaks(spectrum, height=0)
-    if len(raw_peaks) == 0:
-        return []
-
-    # Partition limits: minima between consecutive peaks
-    # For each peak, partition spans from the preceding minimum to the next
-    def partition_energy(idx: int, all_peaks: np.ndarray) -> float:
-        pos = np.searchsorted(all_peaks, idx)
-        lo = 0 if pos == 0 else _trough(spectrum, all_peaks[pos - 1], idx)
-        hi = len(spectrum) - 1 if pos == len(all_peaks) - 1 else _trough(spectrum, idx, all_peaks[pos + 1])
-        return np.trapezoid(spectrum[lo:hi + 1], freqs[lo:hi + 1])
-
-    E_total = np.trapezoid(spectrum, freqs)
-
-    significant = []
-    for i, idx in enumerate(raw_peaks):
-        fp = freqs[idx]
-
-        # Criterion 1: high-frequency tail
-        if fp > f_max:
-            continue
-
-        # Criterion 2: low partition energy
-        if partition_energy(idx, raw_peaks) < energy_frac * E_total:
-            continue
-
-        # Criterion 3: too few bins on either side of peak
-        left_bins = idx - (0 if i == 0 else raw_peaks[i - 1])
-        right_bins = (len(spectrum) - 1 if i == len(raw_peaks) - 1 else raw_peaks[i + 1]) - idx
-        if left_bins < min_bins or right_bins < min_bins:
-            continue
-
-        # Criterion 4: sandwiched between two higher-energy neighbors
-        left_higher = i > 0 and spectrum[raw_peaks[i - 1]] > spectrum[idx]
-        right_higher = i < len(raw_peaks) - 1 and spectrum[raw_peaks[i + 1]] > spectrum[idx]
-        if left_higher and right_higher:
-            continue
-
-        significant.append(idx)
-
-    return significant
+    return [idx for idx, _, _ in _combined_partitions(freqs, spectrum, f_max, energy_frac, min_bins)]
 
 
 def _trough(spectrum: np.ndarray, left_idx: int, right_idx: int) -> int:
     """Index of the minimum between two peaks."""
     segment = spectrum[left_idx:right_idx + 1]
     return left_idx + int(np.argmin(segment))
+
+
+def _combined_partitions(
+    freqs: np.ndarray,
+    spectrum: np.ndarray,
+    f_max: float,
+    energy_frac: float,
+    min_bins: int,
+) -> list[tuple[int, int, int]]:
+    """
+    Partition-combining loop behind find_significant_peaks/find_peak_windows.
+
+    Repeatedly: partition the spectrum at the minima between the current
+    peaks, check the four criteria, and merge the failing peak with the
+    lowest S(fp) into the neighbour across its shallower trough (the higher
+    trough value, i.e. the weaker separation). The merged pair keeps the
+    higher of the two peaks, so a dominant peak is never given up to a
+    ripple beside it. A failing peak with no neighbour is dropped. Stops
+    when no peak fails; each pass removes one peak, so it terminates.
+
+    Returns (peak_idx, left_idx, right_idx) per surviving peak, ascending
+    frequency. The windows are INCLUSIVE, contiguous (neighbours share their
+    trough bin) and run from 0 to len(spectrum)-1.
+    """
+    from scipy.signal import find_peaks
+
+    peaks = [int(p) for p in find_peaks(spectrum, height=0)[0]]
+    E_total = np.trapezoid(spectrum, freqs)
+    last = len(spectrum) - 1
+
+    def bounds(i: int) -> tuple[int, int]:
+        lo = 0 if i == 0 else _trough(spectrum, peaks[i - 1], peaks[i])
+        hi = last if i == len(peaks) - 1 else _trough(spectrum, peaks[i], peaks[i + 1])
+        return lo, hi
+
+    def spurious(i: int) -> bool:
+        idx = peaks[i]
+        lo, hi = bounds(i)
+        left_higher = i > 0 and spectrum[peaks[i - 1]] > spectrum[idx]
+        right_higher = i < len(peaks) - 1 and spectrum[peaks[i + 1]] > spectrum[idx]
+        return (freqs[idx] > f_max                                                          # 1
+                or np.trapezoid(spectrum[lo:hi + 1], freqs[lo:hi + 1]) < energy_frac * E_total  # 2
+                or idx - lo < min_bins or hi - idx < min_bins                               # 3
+                or (left_higher and right_higher))                                          # 4
+
+    while peaks:
+        failing = [i for i in range(len(peaks)) if spurious(i)]
+        if not failing:
+            break
+        i = min(failing, key=lambda k: spectrum[peaks[k]])
+        neighbours = [k for k in (i - 1, i + 1) if 0 <= k < len(peaks)]
+        if not neighbours:
+            peaks.pop(i)
+            continue
+        lo, hi = bounds(i)
+        j = max(neighbours, key=lambda k: spectrum[lo] if k < i else spectrum[hi])
+        peaks.pop(i if spectrum[peaks[i]] <= spectrum[peaks[j]] else j)
+
+    return [(idx, *bounds(i)) for i, idx in enumerate(peaks)]
 
 
 def find_peak_windows(
@@ -218,10 +242,7 @@ def find_peak_windows(
 ) -> list[tuple[int, int, int]]:
     """
     Like find_significant_peaks, but also returns each surviving peak's
-    trough-to-trough partition window (left_idx, right_idx) — boundary
-    information find_significant_peaks already computes internally (the
-    'lo'/'hi' locals inside its partition_energy closure, used only to
-    gate criterion 2) but never returns.
+    trough-to-trough partition window (left_idx, right_idx).
 
     Motivation: a differentiable "soft peak height" training loss
     (utils.loss.SoftPeakHeightLoss) needs a per-peak window to run a
@@ -229,21 +250,16 @@ def find_peak_windows(
     trough-to-trough partition span — narrow for a narrow swell partition,
     wide for a broad wind-sea partition — rather than an arbitrary fixed
     bin-radius around the peak, which would be too wide for one regime or
-    too narrow for the other. Reusing the partition boundaries this module
-    already computes (rather than re-deriving a different notion of
-    "window") also guarantees two adjacent peaks' windows are contiguous,
-    never overlapping: both share the trough between them as their common
-    boundary.
+    too narrow for the other.
 
-    left_idx/right_idx use EXACTLY the same derivation as
-    find_significant_peaks' internal partition_energy (same _trough calls
-    against the full raw-peak sequence, not just the surviving peaks) — so
-    a window returned here is numerically identical to the span
-    find_significant_peaks already used, internally, to decide whether
-    that peak passed criterion 2.
+    The windows are the COMBINED partitions find_significant_peaks settles
+    on (same _combined_partitions call): a spurious partition has been
+    merged into its neighbour, so each window runs to the trough of the
+    next SURVIVING peak, and together the windows tile the whole grid
+    without gaps or overlap (adjacent windows share their trough bin).
 
-    Not differentiable, not batched — like find_significant_peaks, this
-    loops in Python over a single 1-D spectrum via scipy.signal.find_peaks.
+    Not differentiable, not batched — this loops in Python over a single
+    1-D spectrum via scipy.signal.find_peaks.
     utils.loss.SoftPeakHeightLoss.forward expects left_idx/right_idx already
     computed rather than deriving them itself. The ideal call site is once
     per sample at data-preparation time (mirroring how freq_means/
@@ -262,30 +278,9 @@ def find_peak_windows(
     list[tuple[int, int, int]] — (peak_idx, left_idx, right_idx) per
     surviving peak, in ascending frequency order. left_idx/right_idx are
     INCLUSIVE bin indices; 0 and len(spectrum)-1 at the spectrum's own
-    edges when the peak is the first/last partition (same edge convention
-    as find_significant_peaks' internal partition_energy).
+    edges when the peak is the first/last partition.
     """
-    from scipy.signal import find_peaks
-
-    raw_peaks, _ = find_peaks(spectrum, height=0)
-    if len(raw_peaks) == 0:
-        return []
-
-    significant_idx = find_significant_peaks(
-        freqs, spectrum, f_max=f_max, energy_frac=energy_frac, min_bins=min_bins
-    )
-    if not significant_idx:
-        return []
-    sig_set = set(significant_idx)
-
-    windows = []
-    for i, idx in enumerate(raw_peaks):
-        if idx not in sig_set:
-            continue
-        lo = 0 if i == 0 else _trough(spectrum, raw_peaks[i - 1], idx)
-        hi = len(spectrum) - 1 if i == len(raw_peaks) - 1 else _trough(spectrum, idx, raw_peaks[i + 1])
-        windows.append((int(idx), int(lo), int(hi)))
-    return windows
+    return _combined_partitions(freqs, spectrum, f_max, energy_frac, min_bins)
 
 # ── Quick demo ────────────────────────────────────────────────────────────────
 

@@ -25,9 +25,10 @@ def _peak_windows_for_batch(y_batch, freqs_np, max_peaks=4, f_max=0.4,
         Fixed padding width for the peak axis — a (sample, step) with
         fewer real peaks gets padding slots (peak_mask=False there,
         SoftPeakHeightLoss excludes them); one with MORE than max_peaks
-        significant peaks (rare — see find_significant_peaks' Portilla
-        criteria) has its highest-frequency extras dropped (windows come
-        back in ascending-frequency order from find_peak_windows).
+        significant peaks (about 1% of buoy 32012 test spectra — see
+        manuscript/decisions/log/030) has its highest-frequency extras
+        dropped (windows come back in ascending-frequency order from
+        find_peak_windows).
     f_max, energy_frac, min_bins : forwarded to find_peak_windows.
 
     Returns

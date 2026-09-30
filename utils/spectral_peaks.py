@@ -20,9 +20,12 @@ def find_spectral_peaks(freqs, spectrum, f_max=0.4, energy_frac=0.05, min_bins=2
       4. the peak sits between two higher-energy neighboring peaks (a local
          "sandwich") — reject a minor ripple riding on the shoulder of a
          bigger partition.
+    A rejected partition is combined into a neighbour and the criteria are
+    re-checked, so a ripple beside a real peak cannot take it down with it.
 
     Replaces an earlier scale-free prominence_frac heuristic — see
-    manuscript/decisions/log/008.
+    manuscript/decisions/log/008 (and 030 for the trough-based criterion 3
+    and the combining step).
 
     Note: scipy.signal.find_peaks (used internally by find_significant_peaks)
     cannot flag a peak at index 0 or -1 (no two-sided neighbor to compare

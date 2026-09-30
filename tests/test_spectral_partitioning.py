@@ -100,3 +100,44 @@ class TestFindPeakWindows:
 
         assert len(significant) == 1
         assert len(windows) == 1
+
+
+class TestCombinedPartitions:
+    """Criterion 3 is measured to the partition's troughs, and spurious
+    partitions are combined into a neighbour rather than dropped (Portilla
+    et al. 2009 section 2b.2; manuscript/decisions/log/030)."""
+
+    @staticmethod
+    def _peak_with_ripple(freqs):
+        """A JONSWAP peak with a dip one bin above it, which turns the next
+        bin into a 1-bin ripple: local maxima at p and p+2, trough at p+1."""
+        spectrum = _jonswap(freqs, 2.0, 10.0)
+        p = int(np.argmax(spectrum))
+        spectrum[p + 1] = 0.5 * spectrum[p + 2]
+        return spectrum, p
+
+    def test_ripple_beside_main_peak_is_combined_into_it(self):
+        """Both maxima are 1 bin from their shared trough, so both fail
+        criterion 3; the ripple is merged into the main peak, whose window
+        then spans the whole spectrum. Measured peak-to-peak (the old
+        criterion 3) both would have survived."""
+        spectrum, p = self._peak_with_ripple(FREQS)
+        assert find_peak_windows(FREQS, spectrum) == [(p, 0, len(FREQS) - 1)]
+
+    def test_windows_tile_the_grid(self):
+        rng = np.random.default_rng(0)
+        spectrum = _bimodal(FREQS) * rng.uniform(0.8, 1.2, FREQS.size)
+        windows = find_peak_windows(FREQS, spectrum)
+
+        assert windows[0][1] == 0
+        assert windows[-1][2] == len(FREQS) - 1
+        for (_, _, right), (_, left, _) in zip(windows, windows[1:]):
+            assert right == left
+
+    @pytest.mark.parametrize("seed", range(10))
+    def test_global_max_survives_noise(self, seed):
+        """Multiplicative noise creates many raw local maxima; combining
+        must never hand the dominant peak over to one of them."""
+        rng = np.random.default_rng(seed)
+        spectrum = _jonswap(FREQS, 2.0, 10.0) * rng.uniform(0.7, 1.3, FREQS.size)
+        assert int(np.argmax(spectrum)) in find_significant_peaks(FREQS, spectrum)
