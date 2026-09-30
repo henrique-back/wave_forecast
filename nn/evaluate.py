@@ -333,7 +333,11 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
                                utils.spectral_partitioning.classify_partition
                                (Portilla et al. 2009 / Violante-Carvalho
                                et al. 2002 γ* = S_obs(fp)/S_PM(fp)
-                               threshold). Wind-sea partitions are broad,
+                               threshold), on shape × true m₀ when
+                               dataloader.dataset carries m0_true (as
+                               _prepare_dataloaders' loaders do), else on
+                               the unit-area shape, which biases labels
+                               towards wind sea (decision 029). Wind-sea partitions are broad,
                                energetic, fast-evolving (a magnitude/energy-
                                tracking problem); swell partitions are
                                narrow, slow, persistent (closer to a
@@ -784,8 +788,15 @@ def evaluate(model, dataloader, device='cpu', freqs=None, lead_time=None,
         }
 
         if compute_peak_metrics:
+            # gamma* labels are defined on the physical spectrum (m^2/Hz), so
+            # scale both unit-area shapes by the true m0 when the loader
+            # carries it (_prepare_dataloaders does); peak geometry and every
+            # other peak metric are invariant to that common scaling. See
+            # manuscript/decisions/log/029.
+            m0_true = getattr(dataloader.dataset, 'm0_true', None)
+            scale = 1.0 if m0_true is None else np.asarray(m0_true, dtype=np.float64)[:, -1:]
             peak_metrics, multimodal_mask = peak_modality_metrics(
-                freqs_np, pred_final.numpy(), true_final.numpy())
+                freqs_np, pred_final.numpy() * scale, true_final.numpy() * scale)
             mask_t = torch.from_numpy(multimodal_mask)
 
             def _bucket(mask):

@@ -314,6 +314,7 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
     # For the density target, targets are the normalised spectra (model operates
     # in normalised space; freq_means is applied externally at loss/metric time).
     shape_means = None
+    val_m0 = test_m0 = None
     if target == 'hs':
         train_y = prepare_y(train_density, seq_len, lead_time, target='hs')
         val_y   = prepare_y(val_density,   seq_len, lead_time, target='hs')
@@ -327,6 +328,11 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
         # utils.to_log_space), fit on the training split only, same
         # discipline as freq_means above.
         shape_means = torch.clamp(train_y.mean(dim=(0, 1)), min=1e-8).to(dtype=torch.float32)
+        # prepare_y discards m0 for the shape target, but evaluate()'s
+        # wind-sea/swell labels need the physical spectrum (decision 029):
+        # m0 = (Hs/4)^2 per target step, on the same physical split density.
+        val_m0  = ((prepare_y(val_density,  seq_len, lead_time, target='hs')[..., 0] / 4) ** 2).numpy()
+        test_m0 = ((prepare_y(test_density, seq_len, lead_time, target='hs')[..., 0] / 4) ** 2).numpy()
 
     # Normalize inputs — fit on training data, apply to all splits.
     # Density uses scale-only normalization (divide by per-frequency training mean)
@@ -431,9 +437,9 @@ def _prepare_dataloaders(density, alpha_1, alpha_2, r_1, r_2, seq_len, lead_time
     g.manual_seed(shuffle_seed)
     train_loader = DataLoader(WaveSpectralDataset(train_X, train_aux, train_y), batch_size=batch_size, shuffle=True,
                               worker_init_fn=_seed_worker, generator=g)
-    val_loader   = DataLoader(WaveSpectralDataset(val_X, val_aux, val_y), batch_size=batch_size, shuffle=False,
+    val_loader   = DataLoader(WaveSpectralDataset(val_X, val_aux, val_y, m0_true=val_m0), batch_size=batch_size, shuffle=False,
                               worker_init_fn=_seed_worker, generator=g)
-    test_loader  = DataLoader(WaveSpectralDataset(test_X, test_aux, test_y), batch_size=batch_size, shuffle=False,
+    test_loader  = DataLoader(WaveSpectralDataset(test_X, test_aux, test_y, m0_true=test_m0), batch_size=batch_size, shuffle=False,
                               worker_init_fn=_seed_worker, generator=g)
 
     return (train_loader, val_loader, test_loader, freq_means, shape_means,

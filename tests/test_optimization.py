@@ -10,11 +10,12 @@ import os
 import sys
 
 import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from nn.optimization import _compute_val_score
+from nn.optimization import _compute_val_score, _prepare_dataloaders
 
 
 def _metrics(windsea_rel_err, swell_rel_err, windsea_recall, swell_recall):
@@ -78,3 +79,29 @@ class TestPeakFidelitySS:
         'final_step_SS_wasserstein' and must be unaffected)."""
         metrics = {'per_step_SS': [0.1, 0.2, 0.3], 'Shape_Wasserstein': 0.05}
         assert _compute_val_score(metrics, 'final_step_SS') == pytest.approx(0.3)
+
+
+class TestShapeLoaderCarriesM0:
+    def test_m0_true_reconstructs_physical_target(self):
+        """For target='shape', the val/test datasets carry the physical m0 of
+        every target step, so shape * m0 is the physical density the
+        wind-sea/swell labels need (manuscript/decisions/log/029)."""
+        from tests.test_spectral import _jonswap, FREQS
+        rng = np.random.default_rng(0)
+        n, seq_len, lead = 200, 4, 3
+        density = pd.DataFrame(
+            np.stack([_jonswap(FREQS, rng.uniform(0.5, 3.0), rng.uniform(6, 14)) for _ in range(n)]),
+            columns=[f"{f:.6f}" for f in FREQS])
+        zeros = pd.DataFrame(np.zeros_like(density.values), columns=density.columns)
+
+        _, val_loader, test_loader, *_ = _prepare_dataloaders(
+            density, zeros, zeros, zeros, zeros, seq_len, lead, batch_size=8,
+            target='shape', shuffle_seed=0, channel_set='density')
+
+        freqs = density.columns.astype(float).values
+        test_raw = density.values[int(0.85 * n):]
+        ds = test_loader.dataset
+        assert ds.m0_true.shape == (len(ds), lead)
+        physical = ds.y.numpy() * ds.m0_true[..., None]
+        np.testing.assert_allclose(physical[0], test_raw[seq_len:seq_len + lead], rtol=1e-4)
+        assert val_loader.dataset.m0_true.shape == (len(val_loader.dataset), lead)
