@@ -1,9 +1,9 @@
 {
-    "latex-workshop.latex.outDir": "%DIR%/_build",
+    "latex-workshop.latex.outDir": "./_build",
     "latex-workshop.latex.recipes": [
         {
-            "name": "latexmk (pdflatex + bibtex)",
-            "tools": ["latexmk"]
+            "name": "pdflatex ➞ bibtex ➞ pdflatex × 2",
+            "tools": ["pdflatex", "bibtex", "pdflatex", "pdflatex"]
         },
         {
             "name": "pdflatex only (no bib)",
@@ -12,16 +12,9 @@
     ],
     "latex-workshop.latex.tools": [
         {
-            "name": "latexmk",
-            "command": "latexmk",
-            "args": [
-                "-pdf",
-                "-interaction=nonstopmode",
-                "-synctex=1",
-                "-file-line-error",
-                "-outdir=%OUTDIR%",
-                "%DOC%"
-            ]
+            "name": "bibtex",
+            "command": "bibtex",
+            "args": ["%OUTDIR%/%DOCFILE%"]
         },
         {
             "name": "pdflatex",
@@ -48,11 +41,13 @@
     "latex-workshop.intellisense.package.enabled": true,
     "[tex]": {
         "editor.wordWrap": "on",
-        "editor.formatOnPaste": false
+        "editor.formatOnPaste": false,
+        "editor.formatOnSave": false
     },
     "[latex]": {
         "editor.wordWrap": "on",
-        "editor.formatOnPaste": false
+        "editor.formatOnPaste": false,
+        "editor.formatOnSave": false
     },
     "files.associations": {
         "*.tex": "latex"
