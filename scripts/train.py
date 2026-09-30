@@ -41,7 +41,7 @@ print("Current working directory:", os.getcwd())
 
 # Must match an EXPERIMENT_NAME already produced by scripts/optimize.py —
 # best_trial.txt is read from results/{EXPERIMENT_NAME}/{target}/lead_{N}h/.
-EXPERIMENT_NAME = "shape_v12"
+EXPERIMENT_NAME = "shape_v13"
 BUOY_ID = "32012"
 
 target = "shape"
@@ -57,7 +57,18 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
 # retrained model is selected the same way the search selected it.
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "final_step_SS_wasserstein"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity_SS"
+COMPUTE_PEAK_METRICS = (target == "shape")
+
+# The per-bin loss is always substituted by the KL/Wasserstein/Peak terms
+# (manuscript/decisions/log/026). 'hs' is the exception only because it has
+# no distributional terms — base_loss_weight=0 would zero its entire loss.
+BASE_LOSS_WEIGHT = 1.0 if target == "hs" else 0.0
+
+# Pinned (not searched) for target == 'shape' since v13, so absent from
+# best_trial.txt/current_best.txt — must match scripts/optimize.py's values.
+FIXED_HEAD_DIM = 32
+FIXED_NHEAD = 8
 
 # Seeds to retrain with. A single seed trains one final model. Add more to
 # get a mean±std noise estimate across independent weight initializations and
@@ -159,8 +170,23 @@ def main():
             )
             trial_info = parse_current_best(current_best_path, lead_time_hours)
         params = trial_info["params"]
+        if target == "shape":
+            params.setdefault("head_dim", FIXED_HEAD_DIM)
+            params.setdefault("nhead", FIXED_NHEAD)
         lead_time_steps = trial_info["lead_time_steps"]
         embed_dim = params["head_dim"] * params["nhead"]
+
+        loss_weights = dict(
+            base_loss_weight=BASE_LOSS_WEIGHT,
+            kl_loss_weight=params.get("kl_loss_weight", 0.0),
+            wasserstein_loss_weight=params.get("wasserstein_loss_weight", 0.0),
+            peak_loss_weight=params.get("peak_loss_weight", 0.0),
+        )
+        if target != "hs" and not any(loss_weights.values()):
+            raise ValueError(
+                f"All loss weights are zero for {results_folder} — this "
+                "best_trial.txt predates the KL/Wasserstein/Peak loss (v13)."
+            )
         print(f"({lead_time_steps} steps) — params: {params} ===")
 
         val_metrics_per_seed = []
@@ -225,16 +251,9 @@ def main():
                 num_epochs=NUM_EPOCHS,
                 patience=PATIENCE,
                 trial=None,
-                # .get(..., 0.0) falls back to the pre-v12 no-op behavior for
-                # older best_trial.txt files that predate this hyperparameter
-                # (see manuscript/decisions/log/020).
-                wasserstein_loss_weight=params.get("wasserstein_loss_weight", 0.0),
-                # Not yet in objective()'s search space (see
-                # nn/optimization.py::_train_model's docstring), so
-                # .get(..., 0.0) is currently a no-op — kept so a manually
-                # edited best_trial.txt (or a direct _train_model() call
-                # bypassing this script) can already override it.
-                kl_loss_weight=params.get("kl_loss_weight", 0.0),
+                **loss_weights,
+                peak_max_count=4,  # fixed, not searched — matches objective()
+                compute_peak_metrics=COMPUTE_PEAK_METRICS,
             )
 
             if best_model_state is not None:
@@ -248,6 +267,7 @@ def main():
                 lead_time=lead_time_steps,
                 freq_means=freq_means,
                 shape_means=shape_means,
+                compute_peak_metrics=COMPUTE_PEAK_METRICS,
             )
             print(
                 f"Seed {seed} — best val {OBJECTIVE_METRIC}: {best_val_score:.4f} | "
