@@ -45,6 +45,60 @@ def _normalize(train_df, *other_dfs, mode='zscore'):
 # precisely fit — see manuscript/decisions/log/021.
 _FINAL_STEP_SS_WASSERSTEIN_BETA = 10.0
 
+# Median raw magnitude of each term nn/training_loop.py::train_one_epoch sums,
+# measured by scripts/measure_loss_term_scales.py on the lossablation_v3
+# 'kl'-phase checkpoint (buoy 32012, target='shape', lead 12h, post-030
+# detector, 6 training batches under teacher forcing).
+#
+# These exist because the four terms are summed RAW while living in four
+# unrelated units — log-space squared error, Hz, nats, squared physical E² —
+# spanning ~4.5 orders of magnitude. A raw weight therefore says nothing about
+# how much its term actually contributes, which is how v13's independently
+# sampled weights produced a space whose MEDIAN draw was ~350:1 peak-dominated
+# (decision 033). objective() samples a CONTRIBUTION per term and divides by
+# the reference here, so a sampled value means "this term is worth this much
+# of the loss".
+#
+# Re-derive (and record why in the decision log) whenever something changes
+# what a term measures: the peak detector — decision 030's combining moved the
+# median window 5 -> 16 bins, which rescales L_peak — the target, the
+# normalisation, or the frequency grid. A stale reference silently un-centres
+# the search space; measure_loss_term_scales.py flags drift beyond 2x.
+LOSS_TERM_REFERENCE = {'base': 6.84, 'kl': 0.064, 'w2': 0.0085, 'peak': 197.0}
+
+
+def resolve_loss_weights(params: dict) -> dict:
+    """Absolute {kl,wasserstein,peak}_loss_weight from a trial's params dict.
+
+    v14+ studies sample a contribution and two ratios relative to KL
+    ('kl_contrib', 'w2_rel', 'peak_rel' — see objective()); v13 and earlier
+    sampled the three absolute weights directly. Both forms appear in
+    best_trial.txt/current_best.txt across the results tree, so scripts/train.py
+    reads them through here rather than indexing the raw keys — a v13 retrain
+    has to keep working.
+
+    Raises KeyError if params carries neither form. That is deliberate: the
+    caller previously used params.get(key, 0.0), so a renamed parameter
+    silently produced an all-zero loss and surfaced much later as a confusing
+    "this best_trial.txt predates the KL/Wasserstein/Peak loss" error.
+    """
+    if 'kl_contrib' in params:          # v14+
+        kl_contrib = params['kl_contrib']
+        return {
+            'kl_loss_weight': kl_contrib / LOSS_TERM_REFERENCE['kl'],
+            'wasserstein_loss_weight': (kl_contrib * params['w2_rel']
+                                         / LOSS_TERM_REFERENCE['w2']),
+            'peak_loss_weight': (kl_contrib * params['peak_rel']
+                                  / LOSS_TERM_REFERENCE['peak']),
+        }
+    if 'kl_loss_weight' in params:      # v13 and earlier
+        return {k: params.get(k, 0.0) for k in
+                ('kl_loss_weight', 'wasserstein_loss_weight', 'peak_loss_weight')}
+    raise KeyError(
+        "params carries neither the v14+ loss parameterisation ('kl_contrib', "
+        "'w2_rel', 'peak_rel') nor the pre-v14 absolute weights "
+        f"('kl_loss_weight', ...). Got keys: {sorted(params)}")
+
 
 def _weighted_mean_ss(per_step_ss):
     """Exponentially-weighted mean Skill Score.
@@ -267,6 +321,19 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         # 'shape' has no magnitude to compute a MAPE against.
         hs_mape_str = (f"{val_metrics['Hs_MAPE']:.2f}%"
                        if val_metrics['Hs_MAPE'] is not None else "N/A")
+        # Per-term shares of the training loss, printed only when a composite
+        # is actually in play (more than one term carries weight). A run
+        # dominated by one term should be obvious from epoch 1 rather than
+        # after a whole study — see decisions 032/033.
+        components = train_metrics.get('loss_components') or {}
+        active = {k: v for k, v in components.items() if v != 0.0}
+        comp_total = sum(abs(v) for v in active.values())
+        loss_mix_str = ""
+        if len(active) > 1 and comp_total > 0:
+            shares = " ".join(f"{k} {100 * v / comp_total:.0f}%"
+                              for k, v in sorted(active.items(), key=lambda kv: -abs(kv[1])))
+            loss_mix_str = f" | loss mix: {shares}"
+
         print(f"Epoch {epoch+1}/{num_epochs} - "
               f"Train RMSE: {train_metrics['RMSE']:.4f} | "
               f"Val RMSE: {val_metrics['RMSE']:.4f} | "
@@ -274,6 +341,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
               f"Val CC: {val_metrics['CC']:.4f} | "
               f"Val {objective_metric}: {val_score:.4f} (smoothed: {smoothed_score:.4f}) | "
               f"tf_ratio: {tf_ratio:.2f}"
+              + loss_mix_str
               + bulk_str)
 
         if trial is not None:
@@ -284,6 +352,13 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
         if smoothed_score > best_val_score:
             best_val_score = smoothed_score
             best_val_metrics = val_metrics
+            # Carry the selected epoch's training-loss composition alongside
+            # the validation metrics, so objective() can record it without a
+            # signature change. Prefixed to keep it distinguishable from
+            # evaluate()'s own keys, which are all validation-side.
+            if components:
+                best_val_metrics = {**val_metrics,
+                                    **{f'train_loss_share_{k}': v for k, v in components.items()}}
             # Snapshot the weights at this epoch so downstream evaluation uses
             # the best checkpoint, not whatever the last epoch produced.
             best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -587,33 +662,47 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-2, log=True)
     # target == 'shape' only (no-op otherwise — see train_one_epoch).
     #
-    # v13: range replaced wholesale (was 10-400, tuned under the OLD
-    # Wasserstein-1 metric — see utils/loss.py's 2026-08-17 W1->W2 switch,
-    # which changed what this weight is even balanced against). The new
-    # 1-200 bracket is exactly what scripts/ablate_loss.py's small, fixed-
-    # architecture ablation (STUDY_VERSION lossablation_v2) validated under
-    # the CURRENT W2 metric: winning weights of ~9 (Wasserstein alone),
-    # ~154 (Wasserstein + KL), ~77 (KL + Wasserstein + Peak, i.e. the
-    # 'combined' recipe this study searches) all fall inside it, with
-    # headroom on both edges rather than exactly bracketing them.
-    wasserstein_loss_weight = trial.suggest_float('wasserstein_loss_weight', 1.0, 200.0, log=True)
-    # v13, new: kl_loss_weight/peak_loss_weight promoted from
-    # scripts/ablate_loss.py's manual-A/B/small-ablation-only status
-    # (STUDY_VERSION lossablation_v2 — see nn/training_loop.py's docstring)
-    # into the real search space, alongside wasserstein_loss_weight above —
-    # together these three assemble scripts/ablate_loss.py's 'combined'
-    # recipe (L = D_KL + lambda_1*W2 + lambda_2*L_peak, base_loss_weight=0
-    # — see this function's own base_loss_weight parameter), the only
-    # recipe out of 7 tested that beat the plain per-bin loss on EVERY
-    # wind-sea/swell metric (Peak_Height_RelError, Peak_Separation_Recall,
-    # Tm02_RMSE, Tm02_Bias) rather than trading one off against another.
-    # Ranges are exactly what that ablation validated (kl_loss_weight
-    # winner ~46, peak_loss_weight winner ~9-18 depending on phase) — no
-    # separate manual sweep beyond that ablation exists yet, so widen if
-    # v13 trials cluster at either edge (same convention as lr's docstring
-    # above).
-    kl_loss_weight = trial.suggest_float('kl_loss_weight', 0.1, 50.0, log=True)
-    peak_loss_weight = trial.suggest_float('peak_loss_weight', 0.01, 20.0, log=True)
+    # v14: the three loss weights are no longer sampled as raw multipliers.
+    # train_one_epoch sums the terms RAW and they live in four unrelated units
+    # spanning ~4.5 orders of magnitude (see LOSS_TERM_REFERENCE), so a raw
+    # weight carries no information about how much its term contributes. v13
+    # sampled them independently over 1-200 / 0.1-50 / 0.01-20, which — once
+    # converted to contributions — put the MEDIAN draw at roughly 350:1
+    # peak-dominated and left KL and W2 nearly inert, with a worst case near
+    # 6e5:1. That is the regime decision 032 showed is degenerate for the peak
+    # term, which is position-blind and constrains only ~2.5 scalars of a
+    # 47-dim output. The search was not merely exposed to it; it was centred
+    # in it (decision 033).
+    #
+    # Instead: one overall scale, and two ratios ANCHORED ON KL. With
+    # base_loss_weight=0, KL is the only full-support, position-determining
+    # term left in the composite, so expressing the other two relative to it
+    # is what structurally bounds how far a draw can drift from a
+    # position-determined loss — worst case 20:1 rather than 6e5:1.
+    #
+    # Calibration: the lossablation_v3 'peak' arm (the best-scoring arm at the
+    # time of writing) sits at peak_rel ~= 11.7 and is well behaved, while
+    # 'peak_only' (peak_rel -> infinity, KL absent) collapses. So the evidence
+    # puts the safe ceiling above 11.7, not below it; 20 leaves headroom
+    # without reopening the degenerate regime. The 0.02 floor lets TPE
+    # discover that a term isn't needed without ever reaching exactly zero,
+    # which for the peak term IS the degenerate direction.
+    #
+    # kl_contrib doubles as the loss's overall scale — with no base term to
+    # balance against it behaves like an effective LR multiplier, as
+    # scripts/ablate_loss.py's 'kl' phase comment notes. Gradient clipping
+    # (max_norm=1.0, train_one_epoch) bounds the top end.
+    kl_contrib = trial.suggest_float('kl_contrib', 0.05, 5.0, log=True)
+    w2_rel = trial.suggest_float('w2_rel', 0.02, 20.0, log=True)
+    peak_rel = trial.suggest_float('peak_rel', 0.02, 20.0, log=True)
+    # Derived, not sampled — resolve_loss_weights() is the single definition of
+    # this mapping, so scripts/train.py reconstructs identical weights from a
+    # saved best_trial.txt without duplicating the arithmetic.
+    _loss_weights = resolve_loss_weights(
+        {'kl_contrib': kl_contrib, 'w2_rel': w2_rel, 'peak_rel': peak_rel})
+    kl_loss_weight = _loss_weights['kl_loss_weight']
+    wasserstein_loss_weight = _loss_weights['wasserstein_loss_weight']
+    peak_loss_weight = _loss_weights['peak_loss_weight']
 
     # Safety net: embed_dim must be divisible by nhead (guaranteed by construction
     # above, but kept to catch any future reparameterization changes).
@@ -740,6 +829,15 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
                     'Tm02_Bias_windsea', 'Tm02_Bias_swell']:
             if key in best_val_metrics:
                 trial.set_user_attr(f'val_{key}', best_val_metrics[key])
+        # Training-loss composition at the selected epoch (see _train_model).
+        # Stored unprefixed by 'val_' because these are training-side, and
+        # stored at all because a weight's numeric value says nothing about
+        # how much its term contributed -- the ratios are the only way to see
+        # a trial that ran dominated by one term (decisions 032, 033).
+        for key in ('base', 'w2', 'kl', 'peak'):
+            share_key = f'train_loss_share_{key}'
+            if share_key in best_val_metrics:
+                trial.set_user_attr(share_key, best_val_metrics[share_key])
 
     # Restore best-epoch weights before test evaluation so the reported test
     # metrics correspond to the same model that produced best_val_score.

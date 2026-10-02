@@ -30,7 +30,7 @@ import torch
 
 from utils import get_freqs, set_seed, get_device
 from nn import WaveHeightBaselineNN, evaluate
-from nn.optimization import _prepare_dataloaders, _train_model
+from nn.optimization import _prepare_dataloaders, _train_model, resolve_loss_weights
 from nn.channels import CHANNEL_SETS, AUX_CHANNEL_SETS
 
 print("Current working directory:", os.getcwd())
@@ -176,17 +176,32 @@ def main():
         lead_time_steps = trial_info["lead_time_steps"]
         embed_dim = params["head_dim"] * params["nhead"]
 
-        loss_weights = dict(
-            base_loss_weight=BASE_LOSS_WEIGHT,
-            kl_loss_weight=params.get("kl_loss_weight", 0.0),
-            wasserstein_loss_weight=params.get("wasserstein_loss_weight", 0.0),
-            peak_loss_weight=params.get("peak_loss_weight", 0.0),
-        )
-        if target != "hs" and not any(loss_weights.values()):
-            raise ValueError(
-                f"All loss weights are zero for {results_folder} — this "
-                "best_trial.txt predates the KL/Wasserstein/Peak loss (v13)."
-            )
+        # resolve_loss_weights understands both parameterisations: v14+ stores
+        # (kl_contrib, w2_rel, peak_rel) and derives the absolute weights from
+        # nn/optimization.py::LOSS_TERM_REFERENCE; v13 and earlier stored the
+        # three absolute weights directly. Going through it rather than reading
+        # the keys here means a retrain of either vintage works, and the
+        # contribution->weight arithmetic has exactly one definition. It raises
+        # on a params dict carrying neither, instead of the silent
+        # .get(key, 0.0) that used to turn a renamed parameter into an all-zero
+        # loss surfacing as the misleading "predates v13" error below.
+        if target == "hs":
+            loss_weights = dict(base_loss_weight=BASE_LOSS_WEIGHT,
+                                kl_loss_weight=0.0, wasserstein_loss_weight=0.0,
+                                peak_loss_weight=0.0)
+        else:
+            try:
+                loss_weights = dict(base_loss_weight=BASE_LOSS_WEIGHT,
+                                    **resolve_loss_weights(params))
+            except KeyError as exc:
+                raise ValueError(
+                    f"Could not resolve loss weights for {results_folder} — this "
+                    f"best_trial.txt predates the KL/Wasserstein/Peak loss (v13). {exc}"
+                ) from exc
+            if not any(loss_weights.values()):
+                raise ValueError(
+                    f"All loss weights are zero for {results_folder}."
+                )
         print(f"({lead_time_steps} steps) — params: {params} ===")
 
         val_metrics_per_seed = []

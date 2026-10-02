@@ -61,13 +61,22 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
                     tf_ratio=1.0, freq_means=None, shape_means=None,
                     wasserstein_loss_weight=0.0, kl_loss_weight=0.0,
                     base_loss_weight=1.0, peak_loss_weight=0.0, peak_max_count=4):
-    """Train for one epoch and return {'RMSE': avg_loss}.
+    """Train for one epoch and return {'RMSE': avg_loss, 'loss_components': {...}}.
 
     avg_loss is the mean per-sample training loss actually optimised: RMSE
     for 'hs', but plain MSE in log-space for 'density'/'shape' (see the
     loss computation below) — the dict key is kept as 'RMSE' for logging/
     call-site compatibility, but for density/shape this value is not on the
     same scale as pre-ablation runs or as evaluate()'s reported 'RMSE'.
+
+    'loss_components' breaks that single number into each term's mean
+    per-sample WEIGHTED contribution, keyed 'base'/'w2'/'kl'/'peak', summing
+    to avg_loss. A term whose weight is 0 (or whose peak detection found
+    nothing in any sample) records 0.0. The terms are summed raw while living
+    in four unrelated units spanning ~4.5 orders of magnitude, so the totals
+    alone cannot distinguish a balanced run from one dominated by a single
+    term — the ratios here are what make that visible. See
+    nn/optimization.py::LOSS_TERM_REFERENCE and decisions 032/033.
 
     Parameters
     ----------
@@ -123,6 +132,7 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
     """
     model.train()
     total_loss = 0.0
+    component_totals = {'base': 0.0, 'w2': 0.0, 'kl': 0.0, 'peak': 0.0}
     loss_fn = RMSELoss()
     wasserstein_loss_fn = SpectralWassersteinLoss()
     kl_loss_fn = SpectralKLDivergenceLoss()
@@ -204,13 +214,30 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         # needed here. 'hs': unchanged RMSE on physical metres (see
         # prepare_y and get_start_token).
         squared = model.target in ('density', 'shape')
-        loss = base_loss_weight * loss_fn(y_pred, y_batch, weights=freq_weights, squared=squared)
+        # Each term's WEIGHTED contribution is accumulated alongside the sum.
+        # The terms are summed raw despite living in four unrelated units
+        # (log-space squared error, Hz, nats, squared physical E^2), so the
+        # single scalar below cannot tell you whether a run is balanced or
+        # dominated by one term -- which is how v13 searched a space whose
+        # median draw was ~350:1 peak-dominated without it ever being visible
+        # (decisions 032, 033). utils/loss.py::SoftPeakHeightLoss's docstring
+        # asks for exactly this ("log it as its own component, mirroring
+        # DirectionalLoss's `components` return") so a run isn't misread as
+        # having a nonzero floor it can never cross.
+        base_term = base_loss_weight * loss_fn(y_pred, y_batch, weights=freq_weights,
+                                               squared=squared)
+        loss = base_term
+        batch_components = {'base': base_term.item(), 'w2': 0.0, 'kl': 0.0, 'peak': 0.0}
 
         if model.target in ('density', 'shape') and wasserstein_loss_weight > 0:
-            loss = loss + wasserstein_loss_weight * wasserstein_loss_fn(y_pred, y_batch, freqs)
+            w2_term = wasserstein_loss_weight * wasserstein_loss_fn(y_pred, y_batch, freqs)
+            loss = loss + w2_term
+            batch_components['w2'] = w2_term.item()
 
         if model.target in ('density', 'shape') and kl_loss_weight > 0:
-            loss = loss + kl_loss_weight * kl_loss_fn(y_pred, y_batch, freqs)
+            kl_term = kl_loss_weight * kl_loss_fn(y_pred, y_batch, freqs)
+            loss = loss + kl_term
+            batch_components['kl'] = kl_term.item()
 
         if model.target in ('density', 'shape') and peak_loss_weight > 0:
             left_idx, right_idx, peak_mask = _peak_windows_for_batch(
@@ -218,6 +245,9 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
             peak_term = peak_loss_fn(y_pred, y_batch, freqs, left_idx, right_idx, peak_mask)
             if not torch.isnan(peak_term):
                 loss = loss + peak_loss_weight * peak_term
+                batch_components['peak'] = (peak_loss_weight * peak_term).item()
+            # else: no sample in the batch had a detectable peak -- the term is
+            # skipped entirely, so it contributes 0.0, not a filled-in NaN.
 
         optimizer.zero_grad()
         loss.backward()
@@ -227,9 +257,13 @@ def train_one_epoch(model, dataloader, optimizer, device='cpu', freqs=None,
         optimizer.step()
 
         total_loss += loss.item() * src.size(0)
+        for name, value in batch_components.items():
+            component_totals[name] += value * src.size(0)
 
         loop.set_postfix(batch_loss=loss.item())
 
-    avg_loss = total_loss / len(dataloader.dataset)
+    n_samples = len(dataloader.dataset)
+    avg_loss = total_loss / n_samples
 
-    return {'RMSE': avg_loss}
+    return {'RMSE': avg_loss,
+            'loss_components': {k: v / n_samples for k, v in component_totals.items()}}

@@ -74,7 +74,7 @@ The twelve growth/decay features are mapped jointly to $d_{\text{model}}$ by one
 Decoder inputs pass through the same four-stage embedding, instantiated with $C=1$, and receive the same positional encoding. The decoder is seeded with the last spectrum of the input window, converted to the target quantity and log-transformed like the targets. During inference each subsequent input is the model's previous prediction; during training a causal mask restricts attention to earlier positions. A final linear layer maps each position to a log-spectrum in $\mathbb{R}^F$. At inference, each predicted step is exponentiated, renormalised to unit area (trapezoidal rule on the physical grid) and returned to log space as in the targets before it is fed back, so the autoregressive state remains a valid density. In training, the prediction fed back under scheduled sampling (Section~\ref{sec:training}) is the raw log-space output, so the unit-area constraint is imposed only at inference. The encoder runs once per sample.
 
 \paragraph{Capacity}
-The model dimension is constructed as $d_{\text{model}} = d_{\text{head}} \times n_{\text{head}}$. For the shape model $d_{\text{head}}=32$ and $n_{\text{head}}=8$ are fixed ($d_{\text{model}}=256$), because they were consistently selected in earlier searches (Supplementary Section~S4). The freed search budget goes to the loss weights.
+The model dimension is constructed as $d_{\text{model}} = d_{\text{head}} \times n_{\text{head}}$, which keeps it divisible by the head count by construction. Both factors are searched (Table~\ref{tab:hyper}) rather than fixed, since the capacity a given horizon needs is not known in advance and interacts with the depth and regularisation drawn alongside it.
 
 \subsection{Training}
 \label{sec:training}
@@ -96,7 +96,9 @@ The spectral loss combines three terms evaluated on the log-space prediction $\h
   without an optimal-transport solver \citep{peyre2019}. It tolerates small shifts of a peak but charges a real transport cost for merging two peaks into one, which a pointwise loss does not distinguish from a large displacement.
   \item $\mathcal{L}_{\text{peak}}$ is a differentiable peak-height term. For each trough-to-trough window $k$ of the \emph{true} spectrum (Section~\ref{sec:evaluation}), the predicted peak height is a softmax-weighted average $\hat{H}_k = \sum_{i} \hat{E}(f_i)\,\sigma_k(i)$ with $\sigma_k(i) \propto \exp(\hat{E}(f_i)/\kappa_k)$, and the loss is the mean of $(\hat{H}_k - H_k^{\text{true}})^2$, where $H_k^{\text{true}}$ is the exact window maximum. The temperature $\kappa_k = \max\!\big(\kappa_{\min},\, c\,H_k^{\text{true}}\,(f_{r_k}-f_{l_k})/(f_F - f_1)\big)$, with $c=0.15$, scales with the peak's energy and bandwidth in Hz, so narrow swell peaks get a sharp softmax and broad wind-sea peaks a softer one. Because the windows are fixed by the true spectrum, the term ignores shifts of a peak within its own partition, and so complements $W_2$, which measures position but not amplitude. A peak displaced beyond its partition is penalised as missing, as it also is by $W_2$.
 \end{itemize}
-The weights are tuned per horizon. Implementation details are given in Supplementary Section~S2.
+The three terms are not commensurable: $D_{\text{KL}}$ is a divergence in nats, $W_2$ a distance in hertz, and $\mathcal{L}_{\text{peak}}$ a squared spectral density, and their typical magnitudes on this record differ by several orders of magnitude. The numerical value of a weight therefore carries no information about how much its term contributes to the gradient, and the three cannot be read against one another. We consequently specify each weight as the contribution its term is intended to make, divided by that term's median magnitude $m_\bullet$ over the training split, $\lambda_\bullet = c_\bullet / m_\bullet$, and take $D_{\text{KL}}$ as the reference: the search covers its contribution $c_{\text{KL}}$, which sets the overall scale of Eq.~\eqref{eq:loss}, together with the ratios $\rho_W = c_W / c_{\text{KL}}$ and $\rho_P = c_P / c_{\text{KL}}$ (Table~\ref{tab:hyper}). The reference magnitudes are properties of the loss terms and of the data rather than of the fitted model, and are re-measured whenever the definition of a term changes.
+
+We anchor the ratios on $D_{\text{KL}}$ because it is the only term of Eq.~\eqref{eq:loss} defined across the whole spectrum and sensitive to where energy sits. $\mathcal{L}_{\text{peak}}$ constrains one scalar per detected partition and is invariant to displacement within that partition, so it cannot identify a spectrum on its own; bounding the ratios keeps it acting as a correction to a loss in which the position of energy is already determined, rather than as the objective itself. The weights are tuned per horizon. Implementation details are given in Supplementary Section~S2.
 
 The loss ablation (Section~\ref{sec:ablation}) compares Eq.~\eqref{eq:loss} with a per-bin reference, the frequency-weighted mean squared error in log space, $\mathcal{L}_{\text{base}} = \sum_i w_i\,(\hat{y}_i - y_i)^2$, with trapezoidal quadrature weights $w_i \propto \Delta f_i$ summing to one. It enters with weight $\lambda_{\text{base}}$, which is zero in the final configuration (Table~\ref{tab:hyper}).
 
@@ -126,10 +128,11 @@ Weight decay & $10^{-6}$--$10^{-2}$ (log) \\
 Dropout, per-bin representation & $[0.1, 0.3]$ \\
 Dropout, $d_{\text{model}}$-wide layers & $[0.0, 0.3]$ \\
 Encoder / decoder layers & $\{1,2,3,4\}$ each \\
-$\lambda_{\text{KL}}$, $\lambda_{W}$, $\lambda_{P}$ & $[0.1, 50]$, $[1, 200]$, $[0.01, 20]$ (log) \\
+Loss contribution $c_{\text{KL}}$ & $[0.05, 5]$ (log) \\
+Contribution ratios $\rho_W$, $\rho_P$ & $[0.02, 20]$ each (log) \\
+$d_{\text{head}}$, $n_{\text{head}}$ & $\{8, 16, 32\}$, $\{4, 8\}$ \\
 \midrule
 \multicolumn{2}{l}{\emph{Fixed}} \\
-$d_{\text{head}}$, $n_{\text{head}}$, $d_{\text{model}}$ & 32, 8, 256 \\
 Per-bin width & 8 \\
 Convolutions & kernel 3, dilations 1, 2, 4 \\
 $\lambda_{\text{base}}$ & 0 \\

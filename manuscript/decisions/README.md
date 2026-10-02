@@ -62,6 +62,7 @@ Most decisions will never need promotion — the `log/` entry is the final recor
 | [030](log/030-peak-detector-trough-criterion-combining.md) | Peak detector: criterion 3 to the trough + Portilla combining; physical labels in `evaluate()` — v13 PF 0.58 → −0.05 (12 h val), GEFS ranking reverses | Kept | 2026-09-30 |
 | [031](log/031-peak-fidelity-precision-bounded-product.md) | `peak_fidelity_SS` → `peak_fidelity`: adds peak-separation precision, bounds both terms, combines as a product | Kept | 2026-09-30 |
 | [032](log/032-peak-loss-never-standalone.md) | `SoftPeakHeightLoss` is never a standalone objective (improper: ~2.5 constraints on 47 outputs, position-blind); `peak_only` arm removed | Kept | 2026-10-02 |
+| [033](log/033-loss-weights-contribution-parameterisation.md) | Loss weights sampled as contributions vs measured term magnitudes, not raw multipliers — v13's median draw was 99.5% peak term | Kept | 2026-10-02 |
 
 Composite spectral loss (KL + Wasserstein + soft-max peak height) — see
 [`wasserstein_kl_justification.tex`](wasserstein_kl_justification.tex) directly; it was

@@ -27,14 +27,26 @@ set_seed(42)
 # a fresh study (and fresh DB file) so stale trials never corrupt the TPE
 # surrogate model. Full history of what changed at each version and why:
 # manuscript/decisions/README.md (entries 010-027 cover v8-v13).
-STUDY_VERSION = "v13"
+# v14 (2026-10-02): the three composite-loss weights are no longer sampled
+# as independent raw multipliers. Measuring the terms showed they are summed
+# raw across ~4.5 orders of magnitude of unit mismatch, so v13's ranges put
+# the MEDIAN draw at roughly 350:1 peak-dominated with KL and W2 nearly
+# inert — the search was centred in the regime decision 032 showed is
+# degenerate for the position-blind peak term, not merely exposed to it.
+# v14 samples a contribution and two ratios anchored on KL instead (see
+# nn/optimization.py::objective and LOSS_TERM_REFERENCE), capping the
+# imbalance at 20:1. Trial params are therefore NOT comparable to v13's.
+# Also un-pins head_dim/nhead (see FIXED_HEAD_DIM below) and inherits the
+# redefined 'peak_fidelity' objective from decision 031.
+# See manuscript/decisions/log/033.
+STUDY_VERSION = "v14"
 
 # Short slug used as the top-level folder under results/.
 # Change this whenever you start a new experiment (new architecture, new
 # input variables, etc.) so that each run's results are stored separately
 # and can be compared in RESEARCH_LOG.md.
 # Convention: {short_description}_{STUDY_VERSION}  e.g. 'freq_embedding_v3'
-EXPERIMENT_NAME = "shape_v13"
+EXPERIMENT_NAME = "shape_v14"
 
 # Human-readable description written once to results/{EXPERIMENT_NAME}/metadata.md.
 EXPERIMENT_DESCRIPTION = (
@@ -74,6 +86,15 @@ EXPERIMENT_DESCRIPTION = (
     "peak_fidelity accordingly — see STUDY_VERSION's v13 comment above "
     "for the full rationale and results/lossablation_comparison_v2.md for "
     "the ablation's own numbers."
+    "v14: the three loss weights are reparameterised from independent raw "
+    "multipliers into one contribution plus two ratios anchored on KL "
+    "(kl_contrib, w2_rel, peak_rel), divided through "
+    "nn/optimization.py::LOSS_TERM_REFERENCE — v13's ranges, converted to "
+    "contributions, put the median draw ~350:1 peak-dominated with KL and W2 "
+    "nearly inert. head_dim/nhead return to being searched, since decision "
+    "027's tally rested on studies selected by the now-superseded detector "
+    "and criterion. Per-term loss shares are recorded per trial. See "
+    "manuscript/decisions/log/033."
 )
 
 import argparse
@@ -88,12 +109,18 @@ _args, _ = _parser.parse_known_args()
 lead_times_hours = [_args.lead] if _args.lead is not None else [12, 24, 48]
 target = "shape"
 
-# target == 'shape' only; pass fixed_head_dim=None/fixed_nhead=None to
-# nn.objective to go back to searching them. See manuscript/decisions/log/027.
-FIXED_HEAD_DIM = 32
-FIXED_NHEAD = 8
+# target == 'shape' only; set to an int to pin instead of searching.
+#
+# v14: back to None (searched). Decision 027 pinned these at 32/8 on a tally
+# over shape_v10/v11/v12 best trials, but every one of those studies was
+# selected by the pre-031 peak-fidelity criterion on the pre-030 detector —
+# both since superseded — so the evidence for the pin no longer stands. See
+# manuscript/decisions/log/027, 030, 031.
+FIXED_HEAD_DIM = None
+FIXED_NHEAD = None
 
-# 11 tunable hyperparameters (2 categorical, 2 int, 7 continuous).
+# 13 tunable hyperparameters (4 categorical — head_dim/nhead searched again
+# in v14 — 2 int, 7 continuous).
 # n_startup_trials=18 random samples for multivariate TPE's initial KDE;
 # n_trials=80 leaves 62 for TPE to exploit it. Each of the 3 lead times
 # (--lead) runs this budget as its own Slurm job.
