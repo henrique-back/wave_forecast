@@ -59,7 +59,15 @@ from scripts.ablate_loss import (BUOY_ID, PINNED_CONFIG, TARGET, CHANNEL_SET, AU
                                   LEAD_TIME_HOURS, STUDY_VERSION, PHASE_N_TRIALS, _phase_dir)
 
 PHASES = list(PHASE_N_TRIALS)
-PHASE_COLORS = {"baseline": "C0", "kl": "C1", "wasserstein": "C2", "peak": "C3", "combined": "C4"}
+# Keyed off PHASE_N_TRIALS rather than hard-coded, so a phase added there
+# can't KeyError here: 'wasserstein_only'/'peak_only' were added to the
+# ablation after this map was written and did exactly that. The *_only arms
+# share a hue family with the arm they strip KL from (dashed below), since
+# the pair is meant to be read against each other.
+PHASE_COLORS = {"baseline": "C0", "kl": "C1", "wasserstein": "C2", "peak": "C3",
+                "combined": "C4", "wasserstein_only": "C2", "peak_only": "C3"}
+PHASE_STYLES = {"wasserstein_only": "--", "peak_only": "--"}
+_FALLBACK_COLORS = [f"C{i}" for i in range(10)]
 CATEGORIES = ["wind_sea", "swell", "multimodal"]
 CATEGORY_TITLES = {"wind_sea": "Wind-sea (unimodal)", "swell": "Swell (unimodal)",
                     "multimodal": "Multimodal (2+ peaks)"}
@@ -78,14 +86,31 @@ def classify_sample(freqs_np, true_spec):
     return label  # 'wind_sea' or 'swell'
 
 
-def pick_representative(indices, tm02_values):
-    """Index (into the ORIGINAL test-set array) of the sample whose true
-    Tm02 is closest to this bucket's median — a "typical" example by a
-    criterion that doesn't depend on any one phase's predictions."""
+def pick_representative(indices, tm02_values, k=1):
+    """k indices (into the ORIGINAL test-set array) spanning this bucket's
+    true-Tm02 range, by a criterion that doesn't depend on any one phase's
+    predictions.
+
+    k == 1 keeps the original behaviour exactly: the sample closest to the
+    bucket MEDIAN, i.e. one "typical" example. For k > 1 the targets are k
+    evenly spaced quantiles instead (k=3 -> 25th/50th/75th), so the extra
+    panels show a range of sea states rather than k near-duplicates of the
+    median — the median is still among them whenever k is odd. Picks are
+    de-duplicated, so a bucket with fewer distinct samples than k simply
+    yields fewer panels rather than repeating one."""
     vals = tm02_values[indices]
-    median = np.median(vals)
-    local_pos = int(np.argmin(np.abs(vals - median)))
-    return indices[local_pos]
+    if k == 1:
+        targets = [np.median(vals)]
+    else:
+        targets = np.quantile(vals, np.linspace(0.5 / k, 1 - 0.5 / k, k))
+    picked = []
+    for target in targets:
+        order = np.argsort(np.abs(vals - target))
+        for local_pos in order:                 # skip any already taken
+            if indices[local_pos] not in picked:
+                picked.append(indices[local_pos])
+                break
+    return picked
 
 
 def main():
@@ -95,7 +120,15 @@ def main():
                          default=str(Path(__file__).parent.parent / "results"
                                      / f"lossablation_spectra_{STUDY_VERSION.split('_')[-1]}.png"),
                          help="Output image path")
+    parser.add_argument("--n-samples", type=int, default=3,
+                         help="Total number of sample panels (default 3: one "
+                              "representative per sea state). Slots are shared "
+                              "round-robin across the three sea states, so the "
+                              "stratification is kept however many are asked for, "
+                              "and within a state the picks span its Tm02 range.")
     args = parser.parse_args()
+    if args.n_samples < 1:
+        parser.error("--n-samples must be >= 1")
 
     project_root = Path(__file__).resolve().parent.parent
     file_path = project_root / "buoy_data" / BUOY_ID / "processed_data.pkl"
@@ -170,28 +203,50 @@ def main():
     labels = [classify_sample(freqs_np, true_final[i]) for i in range(n)]
     _, tm02_all = compute_bulk_params(true_final, freqs_np)  # Hs discarded, meaningless on shape
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
-    for ax, category in zip(axes, CATEGORIES):
-        indices = np.array([i for i in range(n) if labels[i] == category])
-        if indices.size == 0:
-            ax.set_title(f"{CATEGORY_TITLES[category]} — no test sample found")
-            ax.axis("off")
-            continue
-        idx = pick_representative(indices, tm02_all)
+    # Share the requested panel count round-robin across the sea states, so
+    # the stratification survives any --n-samples (8 -> 3 wind_sea, 3 swell,
+    # 2 multimodal) instead of one state crowding the figure out.
+    per_category = {c: args.n_samples // len(CATEGORIES) for c in CATEGORIES}
+    for c in CATEGORIES[:args.n_samples % len(CATEGORIES)]:
+        per_category[c] += 1
 
+    panels = []  # (category, sample index)
+    for category in CATEGORIES:
+        indices = np.array([i for i in range(n) if labels[i] == category])
+        if indices.size == 0 or per_category[category] == 0:
+            if per_category[category]:
+                print(f"[{category}] no test sample in this bucket — no panel drawn.")
+            continue
+        for idx in pick_representative(indices, tm02_all, k=per_category[category]):
+            panels.append((category, idx))
+
+    if not panels:
+        raise RuntimeError("No test sample fell into any sea-state bucket — nothing to plot.")
+
+    ncols = min(len(panels), 4)
+    nrows = int(np.ceil(len(panels) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5.5 * nrows), squeeze=False)
+    axes = axes.ravel()
+    for ax in axes[len(panels):]:
+        ax.axis("off")
+
+    for ax, (category, idx) in zip(axes, panels):
         ax.plot(freqs_np, true_final[idx], "k-", linewidth=2.5, label="True")
         ax.plot(freqs_np, pers_final[idx], color="gray", linestyle="--", linewidth=1.5,
                 label="Persistence")
-        for phase in PHASES:
+        for i, phase in enumerate(PHASES):
             if phase not in pred_final_by_phase:
                 continue
-            ax.plot(freqs_np, pred_final_by_phase[phase][idx], color=PHASE_COLORS[phase],
+            ax.plot(freqs_np, pred_final_by_phase[phase][idx],
+                    color=PHASE_COLORS.get(phase, _FALLBACK_COLORS[i % len(_FALLBACK_COLORS)]),
+                    linestyle=PHASE_STYLES.get(phase, "-"),
                     linewidth=1.8, label=phase)
 
         ax.set_title(f"{CATEGORY_TITLES[category]} — sample {idx} (Tm02={tm02_all[idx]:.2f}s)")
         ax.set_xlabel("Frequency (Hz)")
         ax.grid(True, alpha=0.3)
-    axes[0].set_ylabel("Shape E(f)/m₀")
+    for row_start in range(0, len(panels), ncols):   # leftmost panel of each row
+        axes[row_start].set_ylabel("Shape E(f)/m₀")
     axes[0].legend(fontsize=9, loc="upper right")
 
     fig.suptitle(f"Loss-ablation phases vs. true/persistence — target={TARGET}, "

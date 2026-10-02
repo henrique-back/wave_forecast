@@ -38,9 +38,19 @@ in order):
                  different question than 'wasserstein' below: does
                  Wasserstein need KL underneath it to be useful, or does
                  it work fine on its own?
-    peak_only    base_loss_weight=0, kl_loss_weight=0, searches
-                 peak_loss_weight alone -- same question as
-                 wasserstein_only, for the peak term.
+    (peak_only   REMOVED 2026-10-02 -- see manuscript/decisions/log/032.
+                 It asked wasserstein_only's question for the peak term, and
+                 the answer is settled: SoftPeakHeightLoss cannot substitute
+                 the per-bin loss, for a structural reason, so re-running it
+                 only ever burns GPU confirming it again. The term is one
+                 scalar per true peak window (~2.5 per sample against 47
+                 outputs), its softmax support is confined to whichever bins
+                 the PREDICTION currently peaks at, and it is by design
+                 translation-invariant -- so its minimiser is a manifold of
+                 spectra, not the true one. The v3 run drove its training
+                 loss 5.9 -> 1.9 while validation CC stayed at 0.03-0.08:
+                 the optimiser succeeded and the objective did not identify
+                 the target. Do NOT re-add this phase.)
     wasserstein  base_loss_weight=0, kl_loss_weight fixed at 'kl' phase's
                  winner, searches wasserstein_loss_weight only (fresh
                  range, see the W1->W2 note above).
@@ -98,16 +108,36 @@ set_seed(42)
 BUOY_ID = "32012"
 # v1's DB/results (baseline/kl/wasserstein completed, peak killed ~12h in)
 # used 'final_step_SS' and are incomparable/superseded — see
-# manuscript/decisions/log/009 for why v2 uses 'peak_fidelity_SS' instead.
-STUDY_VERSION = "lossablation_v2"
+# manuscript/decisions/log/009 for why v2 moved to a peak-fidelity objective.
+#
+# v3 (2026-09-30): v2's results are superseded in turn, for two independent
+# reasons, both from decision 030.
+#   1. The peak DETECTOR was wrong (criterion 3 measured to the neighbouring
+#      maximum rather than the trough; spurious partitions dropped instead of
+#      combined). Truth went from 4.21 to 2.53 peaks/spectrum, so every
+#      number in results/lossablation_comparison_v2.md scores a panel that no
+#      longer exists.
+#   2. The same detector backs SoftPeakHeightLoss's training windows
+#      (nn/training_loop.py::_peak_windows_for_batch), median 5 -> 16 bins.
+#      v2's weights were therefore tuned against a peak LOSS that has since
+#      changed shape — not just a changed metric.
+# Decision 031 additionally redefined the objective (see OBJECTIVE_METRIC).
+# v2's DB and results/ directories are left in place untouched.
+STUDY_VERSION = "lossablation_v3"
 LEAD_TIME_HOURS = 12
 TARGET = "shape"
 CHANNEL_SET = "full"
 AUX_SET = "dmd"
-OBJECTIVE_METRIC = "peak_fidelity_SS"  # applied uniformly to every phase,
+OBJECTIVE_METRIC = "peak_fidelity"  # applied uniformly to every phase,
                                      # including 'baseline', for a consistent
                                      # cross-phase comparison — see
-                                     # manuscript/decisions/log/009
+                                     # manuscript/decisions/log/009, and 031
+                                     # for the rename + redefinition (it now
+                                     # carries a false-positive term, which
+                                     # the recall-only v2 form lacked).
+# Effectively inert under the 030 detector: spectra with >4 significant peaks
+# fell from 39.5% to 1.3% of the test split, so this cap almost never binds
+# now. Left at 4 rather than retuned as a side effect of this re-run.
 MAX_PEAKS = 4
 
 # Architecture + training hyperparameters pinned from
@@ -126,9 +156,14 @@ PINNED_CONFIG = dict(
     weight_decay=0.0004182586391136781,
 )
 
-PHASE_N_TRIALS = {"baseline": 5, "kl": 15, "wasserstein_only": 15, "peak_only": 15,
+# 'peak_only' is deliberately absent — see the module docstring and
+# manuscript/decisions/log/032. This dict is the single source of the phase
+# list (compare_ablation_phases.py, evaluate_ablation_phases.py and
+# plot_ablation_spectra.py all do PHASES = list(PHASE_N_TRIALS)), so dropping
+# it here removes the arm everywhere at once.
+PHASE_N_TRIALS = {"baseline": 5, "kl": 15, "wasserstein_only": 15,
                   "wasserstein": 15, "peak": 15, "combined": 18}
-PHASE_N_STARTUP = {"baseline": 5, "kl": 5, "wasserstein_only": 5, "peak_only": 5,
+PHASE_N_STARTUP = {"baseline": 5, "kl": 5, "wasserstein_only": 5,
                    "wasserstein": 5, "peak": 5, "combined": 8}
 
 
@@ -165,19 +200,40 @@ def _fixed_weights_for_phase(phase):
     if phase == "wasserstein_only":
         return 0.0, dict(kl_loss_weight=0.0, peak_loss_weight=0.0)
     if phase == "peak_only":
-        return 0.0, dict(kl_loss_weight=0.0, wasserstein_loss_weight=0.0)
+        # Removed deliberately, not an oversight — see the module docstring
+        # and manuscript/decisions/log/032. Named explicitly so re-adding it
+        # is a conscious act rather than something a stale --phase argument
+        # resurrects silently.
+        raise ValueError(
+            "Phase 'peak_only' was removed (decision 032): SoftPeakHeightLoss is "
+            "structurally improper as a standalone objective — ~2.5 scalar constraints "
+            "on 47 outputs, support confined to the prediction's own current maxima, and "
+            "translation-invariant by design, so its minimiser is a manifold rather than "
+            "the true spectrum. The v3 run confirmed it (train loss 5.9->1.9, val CC "
+            "0.03-0.08). Use 'peak' (KL + peak) instead."
+        )
+    # Reject an unknown phase BEFORE the disk read below. The read is what
+    # makes this ordering matter: with it first, a typo'd phase name
+    # surfaced as FileNotFoundError("run --phase kl first") — which is both
+    # the wrong error and actively misleading advice. It only ever looked
+    # correct because a completed 'kl' happened to be on disk for the
+    # current STUDY_VERSION; bumping the version made every unknown name
+    # fail that way instead.
+    if phase not in ("wasserstein", "peak", "combined"):
+        raise ValueError(f"Unknown phase {phase!r}")
     # Everything below builds on 'kl's winning weight -- no dependency on it
-    # for wasserstein_only/peak_only above, which is exactly their point:
-    # do Wasserstein/Peak need KL underneath to substitute the per-bin loss
-    # (as 'wasserstein'/'peak' below assume), or do they work fine alone?
+    # for wasserstein_only above, which is exactly its point: does
+    # Wasserstein need KL underneath to substitute the per-bin loss (as
+    # 'wasserstein'/'peak' below assume), or does it work fine alone? That
+    # question is only worth asking for a term that COULD stand alone; W2 is
+    # a full-support transport distance, so it can. The peak term is not
+    # (decision 032), which is why there is no 'peak_only' counterpart.
     kl_w = _read_prior_weight("kl", "kl_loss_weight")
     if phase == "wasserstein":
         return 0.0, dict(kl_loss_weight=kl_w, peak_loss_weight=0.0)
     if phase == "peak":
         return 0.0, dict(kl_loss_weight=kl_w, wasserstein_loss_weight=0.0)
-    if phase == "combined":
-        return 0.0, dict(kl_loss_weight=kl_w)
-    raise ValueError(f"Unknown phase {phase!r}")
+    return 0.0, dict(kl_loss_weight=kl_w)  # 'combined'
 
 
 def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, results_folder):
@@ -192,16 +248,32 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
             # LR multiplier than a delicate two-term mixing ratio — gradient
             # clipping (max_norm=1.0, see train_one_epoch) bounds the downside
             # of a too-large draw, so a wide bracket is reasonable to explore.
-            weights["kl_loss_weight"] = trial.suggest_float("kl_loss_weight", 0.1, 50.0, log=True)
+            # v3: upper bound 50 -> 200. v2's winner was 45.87, i.e. hard
+            # against the old ceiling, which is exactly the "widen if a
+            # phase's trials cluster at either edge" case the module
+            # docstring calls for.
+            weights["kl_loss_weight"] = trial.suggest_float("kl_loss_weight", 0.1, 200.0, log=True)
         elif phase in ("wasserstein", "wasserstein_only"):
             # Same range for both -- same parameter, same mechanism; the
             # only difference is whether kl_loss_weight is fixed nonzero
             # (see _fixed_weights_for_phase) or pinned to 0 alongside it.
+            # v3: 200 -> 1000, v2's 'wasserstein' winner was 154.0 (near the
+            # old ceiling), though 'wasserstein_only' settled at 9.5 -- the
+            # wider bracket covers both without forcing a choice.
             weights["wasserstein_loss_weight"] = trial.suggest_float(
-                "wasserstein_loss_weight", 1.0, 200.0, log=True)
-        elif phase in ("peak", "peak_only"):
+                "wasserstein_loss_weight", 1.0, 1000.0, log=True)
+        elif phase == "peak":
+            # v3: [0.01, 20] -> [0.001, 100]. v2's 'peak_only' winner sat at
+            # 0.0108, essentially ON the old floor. The bracket also has to
+            # move because SoftPeakHeightLoss's windows widened (median 5 ->
+            # 16 bins under the 030 detector), so the term's magnitude per
+            # unit weight is not what it was when [0.01, 20] was chosen.
+            # Note the upper end is only safe BECAUSE kl_loss_weight is fixed
+            # nonzero in this phase: the peak term carries no position
+            # information of its own, so letting it dominate the gradient
+            # walks back toward the removed 'peak_only' regime (decision 032).
             weights["peak_loss_weight"] = trial.suggest_float(
-                "peak_loss_weight", 0.01, 20.0, log=True)
+                "peak_loss_weight", 0.001, 100.0, log=True)
         elif phase == "combined":
             w_center = _read_prior_weight("wasserstein", "wasserstein_loss_weight")
             p_center = _read_prior_weight("peak", "peak_loss_weight")
@@ -263,8 +335,19 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
                 current_best = float('-inf')
             if best_val_score > current_best:
                 torch.save({
-                    'model_state_dict': best_model_state,
-                    'params': trial.params,
+                    # PINNED_CONFIG first so trial.params wins on any overlap.
+                    # trial.params alone holds ONLY this phase's searched loss
+                    # weight -- the architecture is pinned, so it never passes
+                    # through trial.suggest_* and never lands there. That made
+                    # these checkpoints unloadable by anything built on
+                    # nn.checkpoints.build_model (scripts/infer.py,
+                    # compare_versions.py, compare_physical_baseline.py), which
+                    # reads embed_dim as params['head_dim'] * params['nhead'];
+                    # scripts/evaluate_ablation_phases.py only works because it
+                    # re-imports PINNED_CONFIG itself. Same failure mode as the
+                    # fixed_head_dim gap in nn/optimization.py (decision 031):
+                    # 'params' must be a complete reconstruction recipe.
+                    'params': {**PINNED_CONFIG, **trial.params},
                     'target': TARGET,
                     'lead_time_steps': LEAD_TIME_HOURS,
                     'freq_means': freq_means,
@@ -281,14 +364,30 @@ def make_objective(phase, density, alpha_1, alpha_2, r_1, r_2, wind, freqs, resu
                 }, Path(results_folder) / 'best_model.pt')
 
         if best_val_metrics is not None:
+            # v3 adds Peak_Separation_Precision (new in decision 031), the
+            # peak-count pair, and Tm02_Bias_*. The bias keys were the gap
+            # that forced scripts/evaluate_ablation_phases.py to re-run a
+            # full test pass just to recover them for
+            # compare_ablation_phases.py's '[val]'-sourced rows.
             for key in ['RMSE', 'Hs_MAPE', 'CC', 'Bias', 'R2', 'overall_SS',
                         'Shape_RMSE', 'Shape_SS', 'Shape_Mass_Error',
                         'Peak_Height_RelError_windsea', 'Peak_Height_RelError_swell',
                         'Peak_Separation_Recall_windsea', 'Peak_Separation_Recall_swell',
+                        'Peak_Separation_Precision',
+                        'Peak_Count_True_Mean', 'Peak_Count_Pred_Mean',
                         'Peak_windsea_n', 'Peak_swell_n',
-                        'Tm02_RMSE_windsea', 'Tm02_RMSE_swell']:
+                        'Tm02_RMSE_windsea', 'Tm02_RMSE_swell',
+                        'Tm02_Bias_windsea', 'Tm02_Bias_swell']:
                 if key in best_val_metrics:
                     trial.set_user_attr(f'val_{key}', best_val_metrics[key])
+            # Training-loss composition at the selected epoch — the per-phase
+            # analogue of what nn/optimization.py::objective records. For this
+            # study it is the direct read on whether an arm ran balanced or
+            # dominated by a single term (decisions 032, 033).
+            for key in ('base', 'w2', 'kl', 'peak'):
+                share_key = f'train_loss_share_{key}'
+                if share_key in best_val_metrics:
+                    trial.set_user_attr(share_key, best_val_metrics[share_key])
 
         return best_val_score
 
@@ -301,8 +400,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--phase", required=True,
-                         choices=["baseline", "kl", "wasserstein_only", "peak_only",
-                                  "wasserstein", "peak", "combined"])
+                         choices=["baseline", "kl", "wasserstein_only",
+                                  "wasserstein", "peak", "combined"])  # no 'peak_only': decision 032
     args = parser.parse_args()
     phase = args.phase
 
