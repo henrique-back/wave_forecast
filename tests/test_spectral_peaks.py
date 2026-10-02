@@ -64,7 +64,46 @@ class TestPeakModalityMetrics:
         assert list(mask) == [False, True]
         assert metrics['Peak_Count_True_Mean'] == pytest.approx(1.5)
         assert metrics['Peak_Separation_Recall'] == pytest.approx(1.0)
+        assert metrics['Peak_Separation_Precision'] == pytest.approx(1.0)
         assert metrics['Peak_Height_RelError'] == pytest.approx(0.0, abs=1e-6)
+
+
+class TestPeakSeparationPrecision:
+    """Precision is the false-positive half that Peak_Separation_Recall
+    cannot see (decision 031). Recall asks 'did the model put a peak near
+    each true peak'; nothing asked 'does each predicted peak correspond to
+    anything', so a model could win on recall by predicting peaks
+    everywhere."""
+
+    def test_extra_spurious_peak_lowers_precision_while_recall_stays_perfect(self):
+        """The exact blind spot: the prediction contains the true peak AND a
+        second, well-separated invented one. Recall is untouched; only
+        precision moves."""
+        true_spec = _jonswap(FREQS, 2.0, 10.0)
+        pred_spec = true_spec + _jonswap(FREQS, 2.0, 5.0)
+        true = true_spec[None, :]
+        pred = pred_spec[None, :]
+
+        metrics, _ = peak_modality_metrics(FREQS, pred, true)
+
+        assert metrics['Peak_Count_True_Mean'] == pytest.approx(1.0)
+        assert metrics['Peak_Count_Pred_Mean'] == pytest.approx(2.0)
+        assert metrics['Peak_Separation_Recall'] == pytest.approx(1.0)
+        assert metrics['Peak_Separation_Precision'] == pytest.approx(0.5)
+
+    def test_identical_pred_and_true_gives_perfect_precision(self):
+        true = _bimodal(FREQS)[None, :]
+        metrics, _ = peak_modality_metrics(FREQS, true.copy(), true)
+        assert metrics['Peak_Separation_Precision'] == pytest.approx(1.0)
+
+    def test_no_predicted_peaks_gives_nan_not_zero_division(self):
+        """A flat prediction has an empty predicted peak set, so precision is
+        undefined rather than 0 — _compute_val_score is what decides that an
+        undefined precision scores 0, not this module."""
+        true = _jonswap(FREQS, 2.0, 10.0)[None, :]
+        pred = np.ones_like(true)
+        metrics, _ = peak_modality_metrics(FREQS, pred, true)
+        assert np.isnan(metrics['Peak_Separation_Precision'])
 
     def test_blurred_bimodal_prediction_misses_separation(self):
         """A pred that merges the true spectrum's two peaks into one smoothed

@@ -142,6 +142,17 @@ def peak_modality_metrics(freqs, pred_final, true_final, f_max=0.4, energy_frac=
         'Peak_Separation_Recall' — fraction of true peaks with a predicted
             peak within bin_tolerance bins; the direct "does the model
             separate the peaks" number. Also pooled across both labels.
+        'Peak_Separation_Precision' — the mirror of the above over the
+            PREDICTED peak set: fraction of predicted peaks with a true peak
+            within bin_tolerance bins. Recall alone cannot see a model that
+            invents peaks — nothing charges it for a prediction matching
+            nothing — so a recall-only score is maximised by over-segmenting.
+            Pooled across every sample (micro), and deliberately NOT split by
+            label: labels come from classify_partition on the TRUE partition,
+            and a predicted peak matching nothing has no true partition to
+            inherit one from. Classifying it on the prediction instead would
+            break this module's "geometry and labels from the TRUE spectrum
+            only" convention. NaN when no peak was predicted anywhere.
         'Peak_Height_RelError_windsea', 'Peak_Height_RelError_swell' :
             float — same definition as 'Peak_Height_RelError', pooled
             within that partition label only.
@@ -182,6 +193,11 @@ def peak_modality_metrics(freqs, pred_final, true_final, f_max=0.4, energy_frac=
     n_true_peaks_total = 0
     n_recalled = 0
 
+    # Pooled over the PREDICTED peak set (precision; see docstring for why
+    # this one is never split by label).
+    n_pred_peaks_total = 0
+    n_pred_matched = 0
+
     # Pooled per label.
     rel_errors_by_label = {'wind_sea': [], 'swell': []}
     recalled_by_label = {'wind_sea': [], 'swell': []}
@@ -202,6 +218,18 @@ def peak_modality_metrics(freqs, pred_final, true_final, f_max=0.4, energy_frac=
 
         true_counts[i] = len(true_windows)
         pred_counts[i] = len(pred_peaks)
+
+        # Precision: same bin_tolerance test as `recalled` below, walked from
+        # the other side. A plain membership test, not a one-to-one matching:
+        # with the combined-partition detector both peak sets are small (~2-3
+        # per spectrum) against windows a median 16 bins wide, so there is no
+        # room to claim one true peak with a cluster of predicted ones —
+        # measured, matched and unmatched precision agree to three decimals.
+        true_idxs = np.array([w[0] for w in true_windows], dtype=int)
+        n_pred_peaks_total += len(pred_peaks)
+        if true_idxs.size > 0 and pred_peaks.size > 0:
+            n_pred_matched += int(
+                (np.abs(pred_peaks[:, None] - true_idxs[None, :]).min(axis=1) <= bin_tolerance).sum())
 
         for peak_idx, left, right in true_windows:
             true_h = max(true_spec[peak_idx], 1e-8)
@@ -257,6 +285,8 @@ def peak_modality_metrics(freqs, pred_final, true_final, f_max=0.4, energy_frac=
         'Peak_Height_RelError': float(np.mean(rel_errors)) if rel_errors else float('nan'),
         'Peak_Separation_Recall': (n_recalled / n_true_peaks_total
                                     if n_true_peaks_total > 0 else float('nan')),
+        'Peak_Separation_Precision': (n_pred_matched / n_pred_peaks_total
+                                       if n_pred_peaks_total > 0 else float('nan')),
 
         'Peak_Height_RelError_windsea': _mean_or_nan(rel_errors_by_label['wind_sea']),
         'Peak_Height_RelError_swell'  : _mean_or_nan(rel_errors_by_label['swell']),
