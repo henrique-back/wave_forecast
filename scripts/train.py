@@ -19,6 +19,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utils import require_slurm
 require_slurm("scripts/train.py")
 
+import argparse
 import ast
 import json
 import re
@@ -46,6 +47,16 @@ BUOY_ID = "32012"
 
 target = "shape"
 lead_times_hours = [12]
+
+# Command-line overrides (one lead per Slurm job, see slurm/lead_study/);
+# without arguments the constants above apply unchanged.
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--experiment", default=EXPERIMENT_NAME)
+_parser.add_argument("--lead", type=int, default=None)
+_args, _ = _parser.parse_known_args()
+EXPERIMENT_NAME = _args.experiment
+if _args.lead is not None:
+    lead_times_hours = [_args.lead]
 
 # Must match the CHANNEL_SET/AUX_SET that produced this experiment's
 # best_trial.txt — see nn/channels.py and scripts/optimize.py.

@@ -20,6 +20,7 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import argparse
 import ast
 import json
 import re
@@ -47,6 +48,15 @@ lead_times_hours = [6, 12, 24, 48]
 DEFAULT_ORDER = 24
 DEFAULT_RIDGE = 1e-6
 
+# Results folder name under results/ — see scripts/optimize_linear_baseline.py.
+NAME = "linear_baseline"
+
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--name", default=NAME)
+_parser.add_argument("--leads", type=int, nargs="+", default=lead_times_hours)
+_args = _parser.parse_args()
+NAME, lead_times_hours = _args.name, _args.leads
+
 
 def parse_best_trial(path: Path) -> dict:
     """Same ast.literal_eval approach scripts/train.py's parse_best_trial
@@ -71,7 +81,7 @@ def main():
 
     for lead_time_hours in lead_times_hours:
         results_folder = (
-            project_root / "results" / "linear_baseline" / target / f"lead_{lead_time_hours}h"
+            project_root / "results" / NAME / target / f"lead_{lead_time_hours}h"
         )
         results_folder.mkdir(parents=True, exist_ok=True)
 

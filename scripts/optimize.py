@@ -99,10 +99,18 @@ EXPERIMENT_DESCRIPTION = (
 
 import argparse
 _parser = argparse.ArgumentParser()
-_parser.add_argument("--lead", type=int, default=None, choices=[6, 12, 24, 48],
+_parser.add_argument("--lead", type=int, default=None, choices=[6, 12, 24, 48, 72, 96],
                       help="Run a single lead time (for one-lead-per-Slurm-job "
                            "submission, e.g. slurm/optimize_v13_lead*.slurm) instead "
                            "of looping over lead_times_hours in one process.")
+_parser.add_argument("--n-trials", type=int, default=None,
+                      help="Override the n_trials budget below (e.g. a smaller budget "
+                           "for a warm-started long-lead study).")
+_parser.add_argument("--warm-start-from", type=int, default=None, metavar="LEAD",
+                      help="When the study is new, enqueue the WARM_START_TOP best "
+                           "completed trials of this lead's study (same STUDY_VERSION, "
+                           "same DB) as its first trials — used for 72/96 h, started "
+                           "from 48 h (see slurm/lead_study/).")
 _args, _ = _parser.parse_known_args()
 
 # Set parameters
@@ -125,6 +133,9 @@ FIXED_NHEAD = None
 # n_trials=80 leaves 62 for TPE to exploit it. Each of the 3 lead times
 # (--lead) runs this budget as its own Slurm job.
 n_trials = 80
+if _args.n_trials is not None:
+    n_trials = _args.n_trials
+WARM_START_TOP = 3
 
 # Which frequency-resolved channels feed the encoder. See nn/channels.py.
 #   'density' : spectral density only
@@ -280,6 +291,14 @@ for lead_time_hours in lead_times_hours:
     # COMPLETE/PRUNED) deliberately — those already consumed a trial slot
     # and won't resolve into one, so counting only finished states would
     # keep re-granting their budget back on every resubmit.
+    if _args.warm_start_from is not None and len(study.trials) == 0:
+        source_name = f"{target_folder}_{CHANNEL_SET}_{AUX_SET}_lead_{_args.warm_start_from}h_{STUDY_VERSION}"
+        source = optuna.load_study(study_name=source_name, storage=storage)
+        done = [t for t in source.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        for t in sorted(done, key=lambda t: t.value, reverse=True)[:WARM_START_TOP]:
+            study.enqueue_trial(t.params)
+            print(f"Warm start: enqueued {source_name} trial {t.number} (value {t.value:.4f})")
+
     remaining_trials = max(0, n_trials - len(study.trials))
     if remaining_trials == 0:
         print(f"Study {study_name!r} already has {len(study.trials)} trials "

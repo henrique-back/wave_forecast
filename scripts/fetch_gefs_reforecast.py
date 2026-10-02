@@ -15,12 +15,14 @@ against.
 
 The daily spectral file is ~516 MB, but efth is chunked per time step and per
 half of the stations, so only the chunks holding this station and leads up to
-MAX_LEAD_H are read, via HTTP Range requests (~32 MB per cycle for 48 h); the
+MAX_LEAD_H are read, via HTTP Range requests (~32 MB per cycle for 48 h,
+roughly twice that for 96 h); the
 table file is read the same way. Each request goes through curl with a hard
 deadline, because on a poor connection a single stalled request can otherwise
 hang for tens of minutes. The spectrum is integrated over
 direction (sum x 2*pi/36 rad) and the 1-D result is cached per date under
-downloads/gefsv12/<station>/ (git-ignored; re-running skips cached dates).
+downloads/gefsv12/<station>/ (git-ignored; re-running skips cached dates whose
+cache reaches MAX_LEAD_H, and re-fetches shorter ones).
 Extracted Hs = 4*sqrt(sum E(f) df), with df from the file's own band edges,
 must match the table file's Hs to within HS_TOL. assemble() then writes one
 small file, buoy_data/<station>/gefsv12_<member>_spec1d.npz:
@@ -53,7 +55,9 @@ MEMBER = "c00"                      # control member only
 NOMINAL_LAT, NOMINAL_LON = -19.425, -85.078   # buoy_data/32012/buoy_ID.txt
 MAX_POS_ERR_DEG = 0.1
 START_DATE, END_DATE = "2017-09-13", "2017-12-31"   # the test split
-MAX_LEAD_H = 48                     # longest lead scored; more leads read more chunks
+MAX_LEAD_H = 96                     # longest lead scored; more leads read more chunks
+                                    # (48 for compare_physical_baseline.py alone, 96 for
+                                    # the lead-time study, scripts/eval_lead_curves.py)
 N_WORKERS = 8                       # requests are latency-bound, not bandwidth-bound
 N_RETRIES = 5
 REQUEST_TIMEOUT_S = 30              # hard deadline per range request
@@ -164,10 +168,19 @@ class HTTPRangeFile(io.RawIOBase):
         return n
 
 
+def cache_ok(date):
+    """True if this date is cached with leads reaching MAX_LEAD_H."""
+    path = cache_dir / f"{date:%Y%m%d}.npz"
+    if not path.exists():
+        return False
+    valid = pd.DatetimeIndex(np.load(path)["valid_times"])
+    return (valid[-1] - date) / pd.Timedelta(hours=1) >= MAX_LEAD_H
+
+
 def fetch_date(date):
     """Extract and cache one cycle; returns the cache path."""
     cache_path = cache_dir / f"{date:%Y%m%d}.npz"
-    if cache_path.exists():
+    if cache_ok(date):
         return cache_path
     stem = f"{BASE_URL}/{date:%Y}/{date:%Y%m%d}/station/gefs.wave.{date:%Y%m%d}.{MEMBER}"
 
@@ -212,14 +225,16 @@ def assemble(dates):
     for date in dates:
         c = np.load(cache_dir / f"{date:%Y%m%d}.npz")
         leads = np.asarray((pd.DatetimeIndex(c["valid_times"]) - date) / pd.Timedelta(hours=1), dtype=float)
+        keep = leads <= MAX_LEAD_H          # a cache fetched for a longer lead is truncated
+        leads = leads[keep]
         if lead_hours is None:
             lead_hours, freqs, freq_lo, freq_hi = leads, c["freqs"], c["freq_lo"], c["freq_hi"]
             lat, lon = float(c["lat"]), float(c["lon"])
         elif not (np.array_equal(leads, lead_hours) and np.array_equal(c["freqs"], freqs)):
             raise ValueError(f"{date:%Y%m%d}: lead times or frequencies differ from the first cycle")
         init_times.append(date)
-        e1d.append(c["e1d"])
-        hs_tab.append(c["hs_tab"])
+        e1d.append(c["e1d"][keep])
+        hs_tab.append(c["hs_tab"][keep])
     e1d, hs_tab = np.stack(e1d), np.stack(hs_tab)
     if not np.isfinite(e1d).all():
         raise ValueError("non-finite values in the assembled spectra")
@@ -232,7 +247,7 @@ def assemble(dates):
 
 def main():
     dates = list(pd.date_range(START_DATE, END_DATE, freq="D"))
-    todo = [d for d in dates if not (cache_dir / f"{d:%Y%m%d}.npz").exists()]
+    todo = [d for d in dates if not cache_ok(d)]
     print(f"{len(dates)} cycles, {len(dates) - len(todo)} already cached, fetching {len(todo)}")
     failed = []
     # Processes, not threads: h5py holds one global lock around every HDF5
