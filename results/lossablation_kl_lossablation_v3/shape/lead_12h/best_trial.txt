@@ -1,0 +1,26 @@
+Phase: kl
+Lead time (hours): 12
+Best trial parameters:
+{'kl_loss_weight': 19.856639417595375}
+val_Bias: 0.60263991355896
+val_CC: 0.8697061538696289
+val_Hs_MAPE: None
+val_Peak_Count_Pred_Mean: 1.7359141433499425
+val_Peak_Count_True_Mean: 2.2610195477194326
+val_Peak_Height_RelError_swell: 0.33647795500597744
+val_Peak_Height_RelError_windsea: 0.38715596371495714
+val_Peak_Separation_Precision: 0.8339589313314197
+val_Peak_Separation_Recall_swell: 0.8187239117471675
+val_Peak_Separation_Recall_windsea: 0.4082514734774067
+val_Peak_swell_n: 3354
+val_Peak_windsea_n: 2545
+val_R2: 0.6513006687164307
+val_RMSE: 2.484179973602295
+val_Shape_Mass_Error: 5.090801735718742e-08
+val_Shape_RMSE: 2.1692633628845215
+val_Shape_SS: 0.13592146154731555
+val_Tm02_Bias_swell: -0.3070354813503081
+val_Tm02_Bias_windsea: 0.10614492828141513
+val_Tm02_RMSE_swell: 0.7452032174728965
+val_Tm02_RMSE_windsea: 0.2601318840998606
+val_overall_SS: -0.7437665161006355
