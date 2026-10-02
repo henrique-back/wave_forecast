@@ -1,5 +1,6 @@
 ---
 status: exploratory — open
+superseded_by: 031
 date: 2026-08-21
 commits: [a89b19c, 5586453]
 category: objective-metric

@@ -38,7 +38,7 @@ Most decisions will never need promotion — the `log/` entry is the final recor
 | [006](log/006-freqdimembedding-conv-attention-pool.md) | `FreqDimEmbedding` internals: flatten+`Linear` pool → dilated-conv + attention pool | Kept | 2026-07-14 |
 | [007](log/007-linear-baseline-sanity-check.md) | Per-frequency linear regression baseline vs. the transformer | Kept as ongoing baseline | 2026-08-05 |
 | [008](log/008-peak-detection-portilla-criteria.md) | Peak detector: scale-free `prominence_frac` heuristic → Portilla et al. (2009) 4-criterion test | Kept | 2026-08-06 |
-| [009](log/009-peak-fidelity-objective-metric.md) | `peak_fidelity_SS` as an Optuna objective metric | Exploratory — open | 2026-08-21 |
+| [009](log/009-peak-fidelity-objective-metric.md) | `peak_fidelity_SS` as an Optuna objective metric | Superseded by 031 | 2026-08-21 |
 | [010](log/010-trapz-weighted-rmse.md) | RMSE (loss + metrics): flat mean → `trapz_weights` frequency-weighted | Kept | 2026-07-16 |
 | [011](log/011-freqdimembedding-replicate-padding.md) | `FreqDimEmbedding` freq-axis conv: zero-padding → replicate-padding | Kept | 2026-07-21 |
 | [012](log/012-scheduled-sampling-per-sample.md) | Scheduled sampling: per-batch → per-sample teacher/model draw | Kept | 2026-07-23 |
@@ -60,6 +60,7 @@ Most decisions will never need promotion — the `log/` entry is the final recor
 | [028](log/028-peak-loss-window-displacement-check.md) | `SoftPeakHeightLoss` windows stay fixed to the true spectrum — displaced peaks rare (~5%) | Kept | 2026-09-29 |
 | [029](log/029-gamma-star-physical-labels.md) | γ\* wind-sea/swell labels on the physical spectrum, not the shape (19.9% of test partitions flip); `evaluate()` fixed in 030 | Kept | 2026-09-30 |
 | [030](log/030-peak-detector-trough-criterion-combining.md) | Peak detector: criterion 3 to the trough + Portilla combining; physical labels in `evaluate()` — v13 PF 0.58 → −0.05 (12 h val), GEFS ranking reverses | Kept | 2026-09-30 |
+| [031](log/031-peak-fidelity-precision-bounded-product.md) | `peak_fidelity_SS` → `peak_fidelity`: adds peak-separation precision, bounds both terms, combines as a product | Kept | 2026-09-30 |
 
 Composite spectral loss (KL + Wasserstein + soft-max peak height) — see
 [`wasserstein_kl_justification.tex`](wasserstein_kl_justification.tex) directly; it was

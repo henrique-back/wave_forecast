@@ -5,7 +5,7 @@ Compare the wind-sea/swell peak-fidelity panel across scripts/ablate_loss.py's
 Reads each phase's best_trial.txt (written by save_progress/ablate_loss.py's
 own result-writing block) — i.e. exactly the VALIDATION-set numbers that
 drove that phase's own weight-selection (see nn/optimization.py::
-_compute_val_score's 'peak_fidelity_SS' docstring), not a fresh evaluate()
+_compute_val_score's 'peak_fidelity' docstring), not a fresh evaluate()
 pass. Fast (no GPU, no data loading), and works incrementally: a phase that
 hasn't finished yet (or was pruned/failed before writing best_trial.txt)
 just prints as "(pending)" rather than erroring — safe to run while the
@@ -32,7 +32,7 @@ and GPU-free while other phases may still be training.
 
 Also reports, for each of the four metrics above, the wind-sea/swell
 AVERAGE (plain arithmetic mean, nan-skipping one label if it's unavailable
-— same convention as nn/optimization.py's 'peak_fidelity_SS').
+— same convention as nn/optimization.py's 'peak_fidelity').
 
 Usage:
     python scripts/compare_ablation_phases.py
@@ -185,6 +185,27 @@ def build_report(study_version, lead_hours):
         lines.append(f"  {_phase_label(phase, source):<18} {_weight_summary(phase, params)}")
     lines.append("")
 
+    # Unsuffixed block: these three have no windsea/swell split (precision
+    # because a false positive has no true partition to take a label from,
+    # the counts because they are per-spectrum). The count pair is the
+    # cheapest read on the failure mode that made this re-run necessary --
+    # pred far above true means the arm is inventing peaks, far below means
+    # it is smoothing them away, and either shows here before any score does.
+    lines.append("Pooled peak counts and precision  (pred count should track true count)")
+    header = f"  {'phase':<18} {'precision':>10} {'#pred':>10} {'#true':>10}"
+    lines.append(header)
+    lines.append("  " + "-" * (len(header) - 2))
+    for phase in PHASES:
+        _, metrics, source = rows[phase]
+        label = _phase_label(phase, source)
+        if metrics is None:
+            lines.append(f"  {label:<18} {'(pending)':>10} {'(pending)':>10} {'(pending)':>10}")
+            continue
+        lines.append(f"  {label:<18} {_fmt(metrics.get('Peak_Separation_Precision'))} "
+                     f"{_fmt(metrics.get('Peak_Count_Pred_Mean'))} "
+                     f"{_fmt(metrics.get('Peak_Count_True_Mean'))}")
+    lines.append("")
+
     for prefix, direction in METRICS:
         lines.append(f"{prefix}  ({direction})")
         header = f"  {'phase':<18} {'windsea':>10} {'swell':>10} {'avg':>10}"
@@ -225,6 +246,23 @@ def build_markdown(study_version, lead_hours):
     for phase in PHASES:
         params, _, source = rows[phase]
         lines.append(f"| {_phase_label(phase, source)} | {_weight_summary(phase, params)} |")
+    lines.append("")
+
+    # See the same block in build_report for why these three are unsuffixed.
+    lines.append("## Pooled peak counts and precision")
+    lines.append("")
+    lines.append("| phase | precision | #pred | #true |")
+    lines.append("|---|---|---|---|")
+    _mfmt = lambda v: "n/a" if v is None else (f"{v:.4f}" if not (isinstance(v, float) and v != v) else "nan")
+    for phase in PHASES:
+        _, metrics, source = rows[phase]
+        label = _phase_label(phase, source)
+        if metrics is None:
+            lines.append(f"| {label} | pending | pending | pending |")
+            continue
+        lines.append(f"| {label} | {_mfmt(metrics.get('Peak_Separation_Precision'))} "
+                     f"| {_mfmt(metrics.get('Peak_Count_Pred_Mean'))} "
+                     f"| {_mfmt(metrics.get('Peak_Count_True_Mean'))} |")
     lines.append("")
 
     for prefix, direction in METRICS:

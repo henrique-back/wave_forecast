@@ -1,4 +1,14 @@
-"""Re-score shape_v13 peak panel: old vs new detector x shape vs physical labels (decision 030)."""
+"""Re-score shape_v13 peak panel: old vs new detector x shape vs physical labels (decision 030).
+
+FROZEN as of decision 031. The 'peak_fidelity_SS' name it asks _compute_val_score
+for no longer exists (renamed to 'peak_fidelity' AND redefined: it now carries a
+false-positive term and multiplies two bounded factors instead of subtracting an
+unbounded one). Re-running this therefore raises ValueError, deliberately: the
+committed rescore_shape_v13.json next to it holds 030's evidence under the OLD
+definition, and scoring it with the new one would silently produce different
+numbers than the decision entry cites. Left as-is so the provenance stays honest;
+use a fresh script if you want the same comparison under 031's metric.
+"""
 import sys, json, time, importlib.util
 from pathlib import Path
 import numpy as np, pandas as pd, torch

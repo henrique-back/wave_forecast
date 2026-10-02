@@ -57,7 +57,7 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 # Metric used to pick the best epoch during retraining. Should match the
 # OBJECTIVE_METRIC that produced this experiment's best_trial.txt, so the
 # retrained model is selected the same way the search selected it.
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity_SS"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity"
 COMPUTE_PEAK_METRICS = (target == "shape")
 
 # The per-bin loss is always substituted by the KL/Wasserstein/Peak terms

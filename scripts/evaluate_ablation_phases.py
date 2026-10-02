@@ -6,7 +6,7 @@ ablation phase's WINNING checkpoint, on the held-out TEST set rather than
 the validation set best_trial.txt reports. Test, not val, is the correct
 split for a final cross-arm comparison: validation was already used to
 pick each phase's winning weight (see nn/optimization.py::_compute_val_
-score's 'peak_fidelity_SS' docstring), so it's the same "don't judge a
+score's 'peak_fidelity' docstring), so it's the same "don't judge a
 result using data/criteria that already selected it" principle applied to
 the train/val/test split instead of the metric choice.
 

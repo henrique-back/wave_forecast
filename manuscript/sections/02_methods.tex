@@ -158,9 +158,9 @@ Persistence repeats the last observed spectrum over all $\tau$ steps. A stronger
 We use a peak-fidelity criterion,
 
 \begin{equation}
-\text{PF} \;=\; \overline{\text{recall}} \;-\; \overline{\text{rel.\,err.}},
+\text{PF} \;=\; F_1\!\left(\text{precision},\, \overline{\text{recall}}\right) \;\times\; \bigl(1 - \min(\overline{\text{rel.\,err.}},\, 1)\bigr),
 \end{equation}
-the class-averaged peak-separation recall minus the class-averaged peak-height relative error (defined below).
+where $\overline{\text{recall}}$ is the class-averaged peak-separation recall, precision is the pooled peak-separation precision, and $\overline{\text{rel.\,err.}}$ is the class-averaged peak-height relative error (all defined below). Recall is averaged over the two classes so that a model cannot ignore whichever is rarer; precision is pooled, since a predicted peak that matches no true partition has no class to be assigned to. Both factors lie in $[0,1]$, so $\text{PF} \in [0,1]$ and neither can be traded away for the other. Recall alone is maximised by over-segmenting, which the precision term penalises; bounding the height error prevents a single badly-missed peak from dominating a criterion whose other term is a fraction. PF is not a skill score: no baseline enters it, so it is interpreted only by comparison against other forecasts scored identically.
 
 \paragraph{Bulk and shape diagnostics}
 In physical units and with trapezoidal moment integrals on the true grid, we report:
@@ -177,9 +177,10 @@ Because aggregate errors dilute errors confined to narrow peaks (Section~[INSERT
   \item the mean number of detected peaks, true and predicted; over-smoothing lowers the predicted count;
   \item peak-height relative error $|\hat{E}(f_p) - E(f_p)|/E(f_p)$ at each true peak, whether or not the model forms a peak there;
   \item peak-separation recall, the fraction of true peaks matched by a significant predicted peak within two bins;
+  \item peak-separation precision, the fraction of predicted peaks that match a true peak within two bins. Recall counts only the peaks the model finds, so on its own it rewards a forecast that emits peaks indiscriminately; precision is what charges it for the ones that correspond to nothing. It is pooled rather than split by class, because a predicted peak with no true counterpart has no partition from which to inherit a label;
   \item $T_{m02}$ RMSE and bias within each true partition, excluding partitions whose predicted energy is below 5\% of the true energy.
 \end{itemize}
-The last three are reported overall and separately for wind sea and swell. Wind-sea partitions are broad and fast-evolving, which makes them mainly a magnitude problem; swell partitions are narrow and persistent, which makes them mainly a position problem. A change that helps only one class can disappear in the pooled figure.
+All but precision and the peak counts are reported overall and separately for wind sea and swell. Wind-sea partitions are broad and fast-evolving, which makes them mainly a magnitude problem; swell partitions are narrow and persistent, which makes them mainly a position problem. A change that helps only one class can disappear in the pooled figure.
  
 The normalisation round trip, the unit-area property of the shape transform and the stated properties of each loss term are checked with unit tests on synthetic spectra (Supplementary Section~S5; code in [INSERT: repository]).
 

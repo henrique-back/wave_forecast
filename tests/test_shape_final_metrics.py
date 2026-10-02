@@ -77,7 +77,7 @@ class TestParityWithEvaluate:
 
         for key, value in ours.items():
             if key not in metrics:
-                continue  # keys the new scorer adds (e.g. *_pers, peak_fidelity_SS)
+                continue  # keys the new scorer adds (e.g. *_pers, peak_fidelity)
             np.testing.assert_allclose(np.asarray(value, dtype=float), np.asarray(metrics[key], dtype=float),
                                        rtol=1e-4, atol=1e-6, err_msg=key)
 
@@ -106,6 +106,7 @@ class TestParityWithEvaluate:
 
         for key in ("Peak_windsea_n", "Peak_swell_n", "Peak_Height_RelError_windsea",
                     "Peak_Height_RelError_swell", "Peak_Separation_Recall_swell",
+                    "Peak_Separation_Precision",
                     "Tm02_RMSE_swell", "Peak_Count_True_Mean"):
             np.testing.assert_allclose(float(ours[key]), float(metrics[key]),
                                        rtol=1e-4, atol=1e-6, err_msg=key)
@@ -138,7 +139,11 @@ class TestGammaStarLabels:
 
         assert (old["Peak_windsea_n"], old["Peak_swell_n"]) == (1, 0)
         assert (new["Peak_windsea_n"], new["Peak_swell_n"]) == (0, 1)
+        # Precision joins this list because it is pure peak GEOMETRY, and
+        # geometry is invariant to the uniform per-sample m0 rescaling that
+        # moves the gamma* labels (decision 029) -- only the labels move.
         for key in ("Peak_Count_True_Mean", "Peak_Count_Pred_Mean", "Peak_Separation_Recall",
+                    "Peak_Separation_Precision",
                     "Peak_Height_RelError", "Tm02_RMSE", "Shape_RMSE", "Shape_Wasserstein"):
             np.testing.assert_allclose(new[key], old[key], rtol=1e-10, err_msg=key)
 

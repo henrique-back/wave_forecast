@@ -71,7 +71,7 @@ EXPERIMENT_DESCRIPTION = (
     "base_loss_weight=0 (literal substitute of the per-bin loss), "
     "L = kl_loss_weight*D_KL + wasserstein_loss_weight*W2 + peak_loss_weight*"
     "L_peak, all three now tunable. OBJECTIVE_METRIC switches to "
-    "peak_fidelity_SS accordingly — see STUDY_VERSION's v13 comment above "
+    "peak_fidelity accordingly — see STUDY_VERSION's v13 comment above "
     "for the full rationale and results/lossablation_comparison_v2.md for "
     "the ablation's own numbers."
 )
@@ -122,9 +122,9 @@ assert AUX_SET in AUX_CHANNEL_SETS, f"AUX_SET must be one of {list(AUX_CHANNEL_S
 # for the full definition of each; manuscript/decisions/log/{001,009,014,021,026}
 # for why each was introduced. Must be one of: 'final_step_SS', 'weighted_mean_SS',
 # 'overall_SS', 'Hs_SS', 'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean',
-# 'final_step_SS_wasserstein', 'peak_fidelity_SS' (target=='shape' only, requires
+# 'final_step_SS_wasserstein', 'peak_fidelity' (target=='shape' only, requires
 # compute_peak_metrics=True — see COMPUTE_PEAK_METRICS below).
-OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity_SS"
+OBJECTIVE_METRIC = "Hs_SS" if target == "hs" else "peak_fidelity"
 
 # Assembles scripts/ablate_loss.py's validated 'combined' recipe (manuscript/
 # decisions/log/026) — target=='shape' only, since that's the ablation's

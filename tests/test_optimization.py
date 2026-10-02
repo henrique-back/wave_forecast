@@ -1,9 +1,14 @@
 """
-Tests for nn/optimization.py::_compute_val_score's 'peak_fidelity_SS'
+Tests for nn/optimization.py::_compute_val_score's 'peak_fidelity'
 objective metric — added 2026-08-19 to fix scripts/ablate_loss.py using an
 RMSE-rooted metric (final_step_SS) to pick the best epoch/trial for arms
 that don't train on RMSE at all (base_loss_weight=0). See that metric's
 docstring entry in _compute_val_score for the full rationale.
+
+Renamed from 'peak_fidelity_SS' and redefined 2026-09-30 (decision 031):
+F1(precision, macro recall) * (1 - min(macro rel_err, 1)), replacing
+`recall - rel_err`, which had no false-positive term and subtracted an
+unbounded ratio from a bounded fraction.
 """
 
 import os
@@ -18,21 +23,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from nn.optimization import _compute_val_score, _prepare_dataloaders
 
 
-def _metrics(windsea_rel_err, swell_rel_err, windsea_recall, swell_recall):
+def _metrics(windsea_rel_err, swell_rel_err, windsea_recall, swell_recall,
+             precision=1.0):
     return {
         'Peak_Height_RelError_windsea': windsea_rel_err,
         'Peak_Height_RelError_swell': swell_rel_err,
         'Peak_Separation_Recall_windsea': windsea_recall,
         'Peak_Separation_Recall_swell': swell_recall,
+        'Peak_Separation_Precision': precision,
     }
 
 
-class TestPeakFidelitySS:
+def _f1(p, r):
+    return 2 * p * r / (p + r)
+
+
+class TestPeakFidelity:
     def test_perfect_prediction_gives_best_possible_score(self):
-        """Zero relative error, perfect recall on both labels -> recall(1.0) -
-        rel_err(0.0) = 1.0, the maximum this metric can produce."""
-        metrics = _metrics(0.0, 0.0, 1.0, 1.0)
-        assert _compute_val_score(metrics, 'peak_fidelity_SS') == pytest.approx(1.0)
+        """Zero relative error, perfect recall AND precision -> F1(1.0) *
+        height_agreement(1.0) = 1.0, the maximum this metric can produce."""
+        metrics = _metrics(0.0, 0.0, 1.0, 1.0, precision=1.0)
+        assert _compute_val_score(metrics, 'peak_fidelity') == pytest.approx(1.0)
 
     def test_higher_is_better_direction(self):
         """Lower relative error and/or higher recall must score strictly
@@ -41,18 +52,47 @@ class TestPeakFidelitySS:
         worse = _metrics(0.5, 0.5, 0.5, 0.5)
         better_recall = _metrics(0.5, 0.5, 0.9, 0.9)
         better_relerr = _metrics(0.1, 0.1, 0.5, 0.5)
-        base_score = _compute_val_score(worse, 'peak_fidelity_SS')
-        assert _compute_val_score(better_recall, 'peak_fidelity_SS') > base_score
-        assert _compute_val_score(better_relerr, 'peak_fidelity_SS') > base_score
+        base_score = _compute_val_score(worse, 'peak_fidelity')
+        assert _compute_val_score(better_recall, 'peak_fidelity') > base_score
+        assert _compute_val_score(better_relerr, 'peak_fidelity') > base_score
+
+    def test_spurious_peaks_are_penalised(self):
+        """The whole point of decision 031: two models with IDENTICAL recall
+        and height error must not score the same when one of them invented a
+        pile of peaks to get that recall. Under the old `recall - rel_err`
+        form these were indistinguishable, which is how shape_v13's
+        over-segmenting forecasts scored 0.56."""
+        honest = _metrics(0.3, 0.3, 0.9, 0.9, precision=0.9)
+        trigger_happy = _metrics(0.3, 0.3, 0.9, 0.9, precision=0.3)
+        assert (_compute_val_score(trigger_happy, 'peak_fidelity')
+                < _compute_val_score(honest, 'peak_fidelity'))
+
+    def test_score_is_bounded_even_for_catastrophic_height_error(self):
+        """rel_err is an unbounded ratio. The old form subtracted it raw, so
+        one badly-missed peak height could dominate a term that was itself a
+        bounded fraction; now it saturates and the score stays in [0, 1]."""
+        catastrophic = _metrics(50.0, 50.0, 1.0, 1.0)
+        score = _compute_val_score(catastrophic, 'peak_fidelity')
+        assert score == pytest.approx(0.0)
+        assert 0.0 <= score <= 1.0
+
+    def test_no_predicted_peaks_scores_zero_not_nan(self):
+        """A pass that predicted no peak anywhere leaves precision NaN (see
+        peak_modality_metrics). That is zero peak fidelity, not missing
+        data — it must not drop out and let recall stand alone."""
+        metrics = _metrics(0.2, 0.2, 0.0, 0.0, precision=float('nan'))
+        score = _compute_val_score(metrics, 'peak_fidelity')
+        assert score == pytest.approx(0.0)
+        assert not np.isnan(score)
 
     def test_one_label_missing_falls_back_to_the_other(self):
         """A validation pass with, say, no true swell partitions detected at
         all (both swell keys NaN together — see peak_modality_metrics)
         must not poison the score; np.nanmean over the two labels should
         just use whichever one is real."""
-        metrics = _metrics(0.2, float('nan'), 0.8, float('nan'))
-        score = _compute_val_score(metrics, 'peak_fidelity_SS')
-        assert score == pytest.approx(0.8 - 0.2)
+        metrics = _metrics(0.2, float('nan'), 0.8, float('nan'), precision=0.6)
+        score = _compute_val_score(metrics, 'peak_fidelity')
+        assert score == pytest.approx(_f1(0.6, 0.8) * (1 - 0.2))
 
     def test_both_labels_missing_gives_negative_infinity_not_nan(self):
         """No true peak detected in EITHER label across the whole
@@ -60,7 +100,7 @@ class TestPeakFidelitySS:
         scheduler/pruner (a NaN comparison is silently always False,
         which would corrupt early-stopping/pruning decisions)."""
         metrics = _metrics(float('nan'), float('nan'), float('nan'), float('nan'))
-        score = _compute_val_score(metrics, 'peak_fidelity_SS')
+        score = _compute_val_score(metrics, 'peak_fidelity')
         assert score == float('-inf')
         assert not np.isnan(score)
 
@@ -71,7 +111,15 @@ class TestPeakFidelitySS:
         RMSE-rooted metric -- that fallback is exactly the bug this metric
         exists to avoid reintroducing."""
         with pytest.raises(KeyError):
-            _compute_val_score({}, 'peak_fidelity_SS')
+            _compute_val_score({}, 'peak_fidelity')
+
+    def test_old_name_is_rejected_loudly(self):
+        """The rename is the mechanism that stops a stale caller silently
+        getting a number on the new, differently-scaled definition (decision
+        031). _compute_val_score must refuse it, not quietly accept it."""
+        metrics = _metrics(0.0, 0.0, 1.0, 1.0)
+        with pytest.raises(ValueError, match='peak_fidelity_SS'):
+            _compute_val_score(metrics, 'peak_fidelity_SS')
 
     def test_does_not_disturb_existing_metric_names(self):
         """Adding the new branch must not change any pre-existing

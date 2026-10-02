@@ -69,14 +69,14 @@ BOOT_METRICS = {
     "Shape_RMSE": True,
     "Shape_Wasserstein": True,
     "Tm02_RMSE": True,
-    "peak_fidelity_SS": False,
+    "peak_fidelity": False,
     "Peak_Separation_Recall_windsea": False,
     "Peak_Separation_Recall_swell": False,
     "Peak_Height_RelError_windsea": True,
     "Peak_Height_RelError_swell": True,
 }
 SUMMARY_METRICS = ["Shape_RMSE", "Shape_SS", "Shape_Wasserstein", "Tm02_RMSE", "Tm02_Bias",
-                   "peak_fidelity_SS", "Peak_Separation_Recall_windsea",
+                   "peak_fidelity", "Peak_Separation_Recall_windsea",
                    "Peak_Separation_Recall_swell", "Peak_Height_RelError_windsea",
                    "Peak_Height_RelError_swell", "Peak_Count_True_Mean", "Peak_Count_Pred_Mean"]
 
@@ -219,7 +219,7 @@ def run_lead(lead, experiment, n_boot, data, gefs):
         "transformer_evaluate_own": {
             "Shape_RMSE": eval_metrics["Shape_RMSE"], "Tm02_RMSE": eval_metrics["Tm02_RMSE"],
             "Shape_Wasserstein": eval_metrics["Shape_Wasserstein"],
-            "peak_fidelity_SS": _compute_val_score(eval_metrics, "peak_fidelity_SS"),
+            "peak_fidelity": _compute_val_score(eval_metrics, "peak_fidelity"),
             "note": "evaluate() on the same start times: full 47-bin grid, floored truth, physical labels",
         },
         "GEFS_lead3h": {m: lead3[m] for m in SUMMARY_METRICS if m in lead3},
@@ -288,10 +288,10 @@ def run_lead(lead, experiment, n_boot, data, gefs):
                          f"| {_fmt(r['p_better'])} |")
     lines += ["", "Context:", "",
               f"- GEFS at +3 h (initialisation mismatch, not an analysis): Shape_RMSE "
-              f"{_fmt(lead3['Shape_RMSE'])}, Tm02_RMSE {_fmt(lead3['Tm02_RMSE'])}, PF {_fmt(lead3['peak_fidelity_SS'])}",
+              f"{_fmt(lead3['Shape_RMSE'])}, Tm02_RMSE {_fmt(lead3['Tm02_RMSE'])}, PF {_fmt(lead3['peak_fidelity'])}",
               f"- Band Hs: GEFS RMSE {_fmt(context['Hs_band']['GEFS_RMSE'])} m, bias "
               f"{_fmt(context['Hs_band']['GEFS_Bias'])} m; persistence RMSE {_fmt(context['Hs_band']['persistence_RMSE'])} m",
-              f"- {experiment} with the old unit-area-shape labels: PF {_fmt(old_labels['peak_fidelity_SS'])}",
+              f"- {experiment} with the old unit-area-shape labels: PF {_fmt(old_labels['peak_fidelity'])}",
               f"- Ridge AR forecasts with negative bins (clipped): {context['ridge_AR_samples_with_negative_bins']} of {n}",
               f"- True significant peaks: {n_peaks_full} on the full grid, {n_peaks_band} on the band",
               f"- Checkpoints: {meta['checkpoints']}"]

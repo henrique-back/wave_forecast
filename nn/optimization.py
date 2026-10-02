@@ -68,20 +68,42 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
     Hs_RMSE, etc.) are negated. Valid values for objective_metric:
     'final_step_SS', 'weighted_mean_SS', 'overall_SS', 'Hs_SS', 'RMSE',
     'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean',
-    'final_step_SS_wasserstein', 'peak_fidelity_SS'.
+    'final_step_SS_wasserstein', 'peak_fidelity'.
 
-    'peak_fidelity_SS' is the odd one out: NOT a transform of RMSE, unlike
-    every other option (recall - rel_err from utils.spectral_peaks.
-    peak_modality_metrics, target=='shape' only; requires
-    compute_peak_metrics=True on the evaluate() call, KeyError otherwise —
-    deliberately not falling back to an RMSE-rooted metric; float('-inf')
-    if no true peak was detected in either label). Needed because
-    scripts/ablate_loss.py trains several arms on a loss that isn't RMSE at
-    all (base_loss_weight=0), so an RMSE-rooted selection metric would bias
-    trial/epoch selection back toward RMSE-friendly behaviour regardless of
-    whether peak fidelity actually improved. See manuscript/decisions/log/
-    001 ('weighted_mean_SS'), 009/026 ('peak_fidelity_SS'), 014
-    ('final_step_SS'), 021 ('final_step_SS_wasserstein').
+    'peak_fidelity' is the odd one out: NOT a transform of RMSE, unlike every
+    other option. It is built from utils.spectral_peaks.peak_modality_metrics
+    (target=='shape' only; requires compute_peak_metrics=True on the
+    evaluate() call, KeyError otherwise — deliberately not falling back to an
+    RMSE-rooted metric; float('-inf') if no true peak was detected in either
+    label):
+
+        R  = nanmean(Peak_Separation_Recall_windsea, _swell)   macro, [0, 1]
+        P  = Peak_Separation_Precision                         pooled, [0, 1]
+        F1 = 2PR / (P + R)
+        H  = 1 - min(nanmean(Peak_Height_RelError_windsea, _swell), 1)
+        peak_fidelity = F1 * H                                         [0, 1]
+
+    Needed because scripts/ablate_loss.py trains several arms on a loss that
+    isn't RMSE at all (base_loss_weight=0), so an RMSE-rooted selection
+    metric would bias trial/epoch selection back toward RMSE-friendly
+    behaviour regardless of whether peak fidelity actually improved.
+
+    Recall stays a macro average over the two partition labels so a model
+    cannot ignore whichever regime is rarer; precision is pooled, since a
+    predicted peak matching nothing has no true partition to take a label
+    from (see peak_modality_metrics).
+
+    Renamed from 'peak_fidelity_SS' and redefined on 2026-09-30: the old form
+    was recall - rel_err, which (a) had no false-positive term, so it was
+    maximised by over-segmenting, and (b) subtracted an unbounded ratio from
+    a bounded fraction. Both terms are now bounded and combined
+    multiplicatively, so neither can be traded away. It is not, and never
+    was, a skill score — no baseline appears in it — hence dropping the _SS.
+    Old and new numbers are NOT comparable; the name change is what makes a
+    stale caller fail loudly here rather than silently rescale. See
+    manuscript/decisions/log/ 001 ('weighted_mean_SS'), 009/026/031
+    ('peak_fidelity'), 014 ('final_step_SS'), 021
+    ('final_step_SS_wasserstein'), 030 (the detector fix that exposed this).
     """
     if objective_metric == 'final_step_SS':
         return metrics['per_step_SS'][-1]
@@ -103,7 +125,7 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         return -metrics['SI_mean']
     elif objective_metric == 'final_step_SS_wasserstein':
         return metrics['per_step_SS'][-1] - _FINAL_STEP_SS_WASSERSTEIN_BETA * metrics['Shape_Wasserstein']
-    elif objective_metric == 'peak_fidelity_SS':
+    elif objective_metric == 'peak_fidelity':
         # nanmean over an all-NaN slice raises numpy's "Mean of empty slice"
         # RuntimeWarning (Python's warnings machinery, not an IEEE-754
         # errstate one -- np.errstate doesn't touch it) -- checked for and
@@ -112,19 +134,34 @@ def _compute_val_score(metrics: dict, objective_metric: str) -> float:
         # peaks in one label.
         rel_errs = [metrics['Peak_Height_RelError_windsea'], metrics['Peak_Height_RelError_swell']]
         recalls = [metrics['Peak_Separation_Recall_windsea'], metrics['Peak_Separation_Recall_swell']]
+        precision = metrics['Peak_Separation_Precision']
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', category=RuntimeWarning)
             rel_err = float(np.nanmean(rel_errs))
             recall = float(np.nanmean(recalls))
         if np.isnan(rel_err) or np.isnan(recall):
             return float('-inf')
-        return recall - rel_err
+        # A pass that predicted no peaks at all leaves precision undefined;
+        # that is zero peak fidelity, not missing data, so it scores 0 rather
+        # than dropping out of the harmonic mean and letting recall stand
+        # alone (recall would be 0 there anyway, but be explicit).
+        if np.isnan(precision):
+            precision = 0.0
+        f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        # Height agreement, bounded into [0, 1] the same way: rel_err is a
+        # ratio with no upper limit, so the pre-2026-09-30 form (recall -
+        # rel_err) let a single badly-missed peak height dominate a score
+        # whose other term was a bounded fraction, at an implicit 1:1 weight
+        # that was never justified. Both factors are now fractions and the
+        # product is in [0, 1], 1 being a perfect forecast.
+        height_agreement = 1.0 - min(rel_err, 1.0)
+        return f1 * height_agreement
     else:
         raise ValueError(
             f"Unknown objective_metric {objective_metric!r}. Valid: "
             "'final_step_SS', 'weighted_mean_SS', 'overall_SS', 'Hs_SS', "
             "'RMSE', 'Hs_RMSE', 'Tm02_RMSE', 'Shape_RMSE', 'SI_mean', "
-            "'final_step_SS_wasserstein', 'peak_fidelity_SS'"
+            "'final_step_SS_wasserstein', 'peak_fidelity'"
         )
 
 
@@ -142,7 +179,7 @@ def _train_model(model, train_loader, val_loader, device, freqs, freq_means,
 
     compute_peak_metrics : bool, default False — forwarded to every per-epoch
         evaluate(...) call. Only needs to be True for objective_metric ==
-        'peak_fidelity_SS' (scripts/ablate_loss.py).
+        'peak_fidelity' (scripts/ablate_loss.py).
 
     wasserstein_loss_weight, kl_loss_weight, base_loss_weight,
     peak_loss_weight, peak_max_count : forwarded to train_one_epoch's
@@ -466,7 +503,7 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
         those targets must not pass 0.0 here.
     compute_peak_metrics : bool, default False — forwarded to
         _train_model/evaluate(). Must be True whenever objective_metric ==
-        'peak_fidelity_SS' (see _compute_val_score's docstring) — that
+        'peak_fidelity' (see _compute_val_score's docstring) — that
         metric needs the wind-sea/swell panel evaluate() only computes
         when this flag is set.
     """
@@ -685,6 +722,24 @@ def objective(trial, *, density, alpha_1, alpha_2, r_1, r_2, freqs, lead_time, t
             for key in ['Shape_RMSE', 'Shape_SS', 'Shape_Mass_Error']:
                 if key in best_val_metrics:
                     trial.set_user_attr(f'val_{key}', best_val_metrics[key])
+        # The raw inputs of 'peak_fidelity' (present only when the run passed
+        # compute_peak_metrics=True). Stored so a later revision of the
+        # metric can re-rank a finished study offline: shape_v13 selected on
+        # the pre-030 score kept none of these, so its 80 trials per lead had
+        # to be thrown away rather than re-scored when the detector was fixed
+        # -- trial.value alone is the old number and nothing else survives.
+        # Peak_Count_True_Mean/_Pred_Mean are in the list because that pair,
+        # not the score, is what makes an over- or under-segmenting model
+        # obvious at a glance.
+        for key in ['Peak_Separation_Recall_windsea', 'Peak_Separation_Recall_swell',
+                    'Peak_Separation_Precision',
+                    'Peak_Height_RelError_windsea', 'Peak_Height_RelError_swell',
+                    'Peak_Count_True_Mean', 'Peak_Count_Pred_Mean',
+                    'Peak_windsea_n', 'Peak_swell_n',
+                    'Tm02_RMSE_windsea', 'Tm02_RMSE_swell',
+                    'Tm02_Bias_windsea', 'Tm02_Bias_swell']:
+            if key in best_val_metrics:
+                trial.set_user_attr(f'val_{key}', best_val_metrics[key])
 
     # Restore best-epoch weights before test evaluation so the reported test
     # metrics correspond to the same model that produced best_val_score.

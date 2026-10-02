@@ -269,7 +269,7 @@ def compute_shape_final_metrics(freqs_np, pred, true, pers, m0_true=None):
     Returns
     -------
     dict — evaluate()'s final-step shape keys, plus Shape_RMSE_pers,
-    Shape_Wasserstein_pers, peak_fidelity_SS and n_samples.
+    Shape_Wasserstein_pers, peak_fidelity and n_samples.
     """
     freqs_np = np.asarray(freqs_np, dtype=np.float64)
     pred, true, pers = (np.asarray(a, dtype=np.float64) for a in (pred, true, pers))
@@ -338,5 +338,5 @@ def compute_shape_final_metrics(freqs_np, pred, true, pers, m0_true=None):
         'Shape_RMSE_multimodal': rmse_multi,
         'Shape_SS_multimodal': ss_multi,
     }
-    metrics['peak_fidelity_SS'] = _compute_val_score(metrics, 'peak_fidelity_SS')
+    metrics['peak_fidelity'] = _compute_val_score(metrics, 'peak_fidelity')
     return metrics
